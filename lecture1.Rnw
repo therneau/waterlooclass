@@ -1,0 +1,258 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath}
+\title{Introduction and Data}
+\author{Terry Therneau}
+
+\addtolength{\textwidth}{1in}
+\addtolength{\oddsidemargin}{-.5in}
+\setlength{\evensidemargin}{\oddsidemargin}
+
+\newcommand{\code}[1]{\texttt{#1}}
+
+\begin{document}
+\maketitle
+
+<<setup>>=
+library(survival)
+library(knitr)
+opts_chunk$set(comment=NA, tidy=FALSE, highlight=FALSE, echo=TRUE,
+               fig.with=7, fig.height=5.5, fig.path="figures/",
+               out.width="\\textwidth", out.height="!", device="pdf",
+               cache=FALSE, background="#FFFFFF",
+               warning=FALSE)
+options(width=60)
+options(show.significant.stars = FALSE) # display statistical intellegence
+table2 <- function(...) table(..., useNA="ifany")
+@
+
+\section{Introduction}
+\begin{quote}
+Well, I generally don't generate ideas of my own. Someone has to come to me with
+ a problem. And, apparently, I'm pretty good at coming up with solutions or idea
+s for solutions. Identifying problems is what is important -- solutions just fol
+low. Nathan Mantel
+\end{quote}
+
+History
+
+\begin{itemize}
+  \item 1953--71 Dairy farm in SE Minn 
+  \item 1971--75 St Olaf College, Mathematics
+  \item 1975--76 Dairy
+  \item 1976--79 Computer programmer, Mayo Clinic
+  \item 1979--83 PhD Stanford
+  \item 1983--85 University of Rochester, NY
+  \item 1985--26 Statistician, Mayo Clinic
+\end{itemize}
+
+Survival Analysis
+\begin{itemize}
+  \item Taylor: all possible Cox regressions
+  \item Moss and Bigger: should ejection fraction be linear or categorical?
+  \item MDPIT: Can we make use of extra information?
+  \item 1984-85: early genesis of the package
+  \item Statlib (1987?), S-Plus, R
+  \item Pattern: A medical problem required an analysis that I didn't
+    have
+\end{itemize}
+
+\subsection*{Why am I here?}
+I have analyses that I have done based on somewhat ad hoc theory, where I
+am comfortable that I have done good science but would appreciate confirmation
+of the underlying method. I have other, pending analyses where things are
+still foggy. I bring real data (which you can use) and real problems, and
+you all can supply the answers. 
+
+A second issue will be coding.  I have made several choices wrt multistate
+models in the survival package, and in the new mshmm package.  Are they
+sensible, useful, understandable, \ldots?
+
+More importantly, this will give us a chance to talk about issues that arise
+in real data, which I hope will be useful. 
+
+\section{Semi-theory}
+The three most popular models in statistics are
+\begin{itemize}
+   \item Linear: $E(y) = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \ldots$
+   \item GLM: $E(y) = g\left(\beta_0 + \beta_1 x_1 + \beta_2 x_2 + \ldots \right)$
+   \item Cox: $\lambda(t) = g\left(\beta_0(t) + \beta_1 x_1 + \beta_2 x_2 + \ldots \right)$
+\end{itemize}
+
+The reason why is simplicity.
+If `x1= apoepos`, then $\beta_1$ is *THE* effect of APOE, independent of any other variables in the model.
+Statisticians like this.
+Investigators really like this (a simple story).
+Regulators demand it --- a single yes/no p-value.
+
+\begin{itemize}
+  \item Generalized additive models will replace one of the $\beta x$ terms
+      with $s(x)$, but retain the separability.
+  \item The function $g$ is chosen to make the model code never fail, which
+    means never predicting an impossible value.
+    \begin{itemize}
+      \item binomial: logistic, probit, cloglog
+      \item Cox, poisson: exp
+    \end{itemize}
+  \item The makes the models less interpretable.      
+\end{itemize}
+
+Science is not always this simple, and multi-state models break the rules.
+That is, a description of the final fit can not be boiled down to one
+number.  
+
+\section{Examples}
+Many of these will be further explained in the draft book (Atkinson, Crowson
+and Therneau) and its examples.  These are part of the materials for the
+course.  Some data sets are in the survival package, some in the mshmm package
+(github.com/therneau/mshmm).
+
+\subsection{Crohn's disease}
+This is discussed in the Therneau and Grambsh (2000), before I understood
+multistate models very well.  The data has been made available in the
+mshmm package.  I would be very interested in a more thoughtful analysis.
+  
+Crohn's disease is a chronic idopathic disease of the gut
+ characterized by transmural inflammation and ulceration.  Managment
+ may require immunosuppressive drugs and surgical interventions.
+This data follows an inception cohort of 174 residents from 1970
+through 1993, with a median follow-up of 10 years. 
+The waxing and waning nature of the disease makes it challenging to
+analyse. 
+\begin{itemize}
+  \item 1488 observations on 174 subjects
+  \item States of remission, mild, treatment responsive, treament dependent,
+    treatment resistant, surgery, death
+\end{itemize}
+
+\subsection{Fatty liver disease}
+Data from a cohort of subjectsw with non-alcoholic fatty liver disease (NAFLD)
+and a set of matched controls. 
+Nonalcoholic fatty liver disease (NAFLD) was renamed metabolic
+dysfunction-associated steatotic liver disease (MASLD) in 1993;
+the new name is intended to better reflect the disease's underlying causes,
+identify subgroups of patients, and avoid stigmatizing words.
+
+The study constructed a population cohort of all MASLD subjects from 1997 to 
+2014 along with 4 potential controls for each case, matched on age, sex, and
+calendar year.  The primary analysis looked at the incidence of 3 metabolic
+comorbidities of diabetes, hypertension, and dyslipidemia.
+See chapter 12 of the book
+
+\section{Acute myeloid leukemia}
+ See chapter 11 of the book
+
+\section{Chronic granulomous disease}
+ See chapter 13
+
+\section{rhDNase for treatment of cyctic fibrosis}
+Original analysis in the 2000 book, updated in chapter 13.
+
+\section{Primary Biliary Cirrhosis}
+We will use this to explore time-dependent covariates and absolute risk.
+See chapter 14.
+
+\section{Mayo Clinic Study of Aging}
+This is the most complex data set and raises the most interesting questions.
+Chapter 14.
+
+<<dementia>>=
+library(mshmm)
+dim(dementia)
+summary(dementia)
+@ 
+
+
+\section{Data}
+The survival package accepts two kinds of input data: counting
+process and timeline style.  The mshmm and msm packages require
+timeline style.
+
+<<counting>>=
+pdat0 <- subset(pbcseq, !duplicated(id))
+pdat0$age10 <- pdat0$age/10
+pdat0$bili3 <- cut(pdat0$bili, c(0,1,5,100), c("normal", "1-4", ">4"))
+pdat0$death <- 1*(pdat0$status ==2)
+
+# Create the time1, time2 dataset
+pdata <- tmerge(pdat0[,c(1,4:6)], pdat0, id=id,
+                 death = event(futime, death),
+                 options= list(tstart="day1", tstop="day2"))
+
+# I have arbitrarily decided not to make use of any new lab within 7
+#  days of death.  This loses 33 bilirubin values.
+ptemp <- subset(pbcseq, !(status ==2 & (futime <= (day + 7))))
+ptemp$bili3 <- cut(ptemp$bili, c(0, 1, 4, 100), c("normal", "1-4", ">4"))
+ptemp$agrp  <- cut(-ptemp$albumin, c(-100, -3.5, -3, 0),
+                   c("normal", "3-3.5", "<3"))
+pdata <- tmerge(pdata, ptemp, id=id, edema = tdc(day, edema),
+                bili= tdc(day, bili), albumin = tdc(day, albumin),
+                protime = tdc(day, protime),
+                bili3 = tdc(day, bili3), b3= event(day, as.numeric(bili3)),
+                agrp  = tdc(day, agrp))
+
+subset(pdata, id<3, c(id, trt, sex, edema, bili, day1, day2, death))
+@
+
+\begin{itemize}
+ \item For this subject: id
+ \item Over this interval: (day1, day2]
+ \item These are the covariates: trt, sex, edema, bili
+ \item The interval ends with alive/dead transition: death
+\end{itemize}
+
+<<counting2>>= 
+# Now create the multistate dataset using bilirubin groups
+# 1. By definition, bilirubin can only change on 'pbcseq' days
+# 2. Don't count two visits in the same state as a transition
+temp <- with(pdata, ifelse(death, 4,
+                           ifelse(as.numeric(bili3)==b3, 0, b3)))
+pdata$bstate <- factor(temp, 0:4, c("none", "normal", "1-4", ">4", "death"))
+pdata$year1 <- pdata$day1/365.25
+pdata$year2 <- pdata$day2/365.25
+
+survcheck(Surv(year1, year2, bstate) ~ 1, pdata, id=id, istate=bili3)
+@ 
+
+Timeline data
+\begin{itemize}
+  \item Subject id and time
+  \item Covariates and/or status observed at that time
+  \item Potentially lots of missing values
+  \item Simple survival: 2 rows per subject
+\end{itemize}
+
+<<timeline>>=
+pdata2 <- subset(pbcseq, select= -c(hepato, spiders, chol, alk.phos, ast,
+                                    platelet, futime, status))
+pdata2$death <- 0
+pdata2$bili3 <- cut(pdata2$bili, c(0, 1, 4, 100), levels(pdata$bili3))
+
+temp <- subset(pbcseq, !duplicated(id), c(id, futime, status))
+temp$day <- temp$futime
+temp$death <- 1*(temp$status==2)
+
+pdata2 <- merge(pdata2, temp, all=TRUE)
+
+temp <- with(pdata2, ifelse(!duplicated(id, fromLast=TRUE), 4*death,
+                            as.numeric(bili3)))
+pdata2$bstate <- factor(temp, 0:4,  
+                        c("none", "normal", "1-4", ">4", "death"))
+subset(pdata2, id <3, c(id, day, death, bstate, trt, age, sex, protime))
+
+survcheck(Surv2(day, bstate) ~ 1, pdata2, id=id)
+
+survcheck(Surv2(as.numeric(day), bstate) ~ 1, pdata2, id=id)
+@
+
+Timeline data sets are easier to create, and I suspect that timeline 
+form will become ascendant.
+
+What about missing values?  Say that someone has a row, in the middle of
+follow-up, with a missing bilirubin.  If that row is removed survcheck will
+fail, and it should.
+
+What if we have a 3 state model, and the covariate e4pos is part of the
+model for ND:dementia but not for ND:death or dementia:death. Should subjects
+who are missing e4 be used for part of the model and not others?
+
+\end{document}
