@@ -1,0 +1,26 @@
+This is material that I would like to cover:
+
+Data sets with open questions
+  Crohn's disease. Would an interval censored model work better?
+  NAFLD: would an interval censored work better?
+         Can we learn more by treating diabetes, hypertension and dislipidemia as separate states?
+         How to tackle heart disease and its multifactorial nature?
+  rhDNase: better analysis than the book
+  MCSA: How do deal with time dependent covariates
+        How do deal with partial information
+        Multiple axes of progression
+        Hidden Markov models
+        
+Example analyses
+   Myeloid: asking multiple questions of the same data set, and how we learn from it
+   NAFLD: walk through the data and analysis behind Allen, Therneau, et al doi: 10.1002/hep.29546
+   MCSA: walk through the data and analyis behind Jack, Therneau et al doi: 10.1093/braincomms/fcac017
+
+Software tools
+  Timeline and counting process data sets
+  multi-state hazard (MSH) models using the survival package
+  censored MSH models using mshmm
+  
+Theory:
+  Early results on using multistate processes for time-dependent covariates
+  likelihood for the mshmm models (and how that affects how we think of the data)
