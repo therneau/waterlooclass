@@ -1,0 +1,289 @@
+\documentclass{article}[12pt]
+\usepackage{amsmath}
+\usepackage{amssymb}
+\addtolength{\textwidth}{1in}
+\addtolength{\oddsidemargin}{-.5in}
+\setlength{\evensidemargin}{\oddsidemargin}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\title{Mayo Clinic Study of Aging}
+\author{Terry Therneau}
+\date{21 May 2026}
+
+\begin{document}
+
+\maketitle
+
+<<setup, echo=FALSE>>=
+library(knitr)
+library(survival)
+library(splines)
+suppressMessages(library(dplyr))
+library(mshmm)
+row.names(dementia) <- NULL
+
+opts_chunk$set(comment=NA, tidy=FALSE, highlight=FALSE, echo=TRUE,
+               fig.width=4.5, fig.height=3, fig.path="figures/",
+               device="pdf", dev.args=list(pointsize=8),
+               cache=FALSE,   background="#ffffff",
+               prompt=TRUE, 
+               strip.white=FALSE, mymar=TRUE)
+options(contrasts= c("contr.treatment", "contr.poly"),
+        show.signif.stars = FALSE, continue=" ", width=70)
+
+# because "mymar" is set to TRUE above, this hook will be run on every chunk.
+# it sets the margins, font, etc to values that work
+knit_hooks$set(mymar= function(before, options, envir) {
+    if (before) {
+        look.for <- c("mar", "font", "cex")  # options we want
+        plist <- options[match(look.for, names(options), nomatch=0)]
+        if (is.null(plist$mar)) plist$mar <- c(4, 4, .5, .5)
+        if (is.null(plist$cex)) plist$cex <- 1
+        do.call("par", plist)
+    } else NULL
+})
+@
+
+\section{Initial look}
+\begin{itemize}
+  \item Population: the set of subjects that you would like to write about
+  \item Frame: the set who have an opportunity to be sampled
+  \item Sample: the study data set
+  \item $Y(t)$ = under observation at time $t$
+  \item MCSA
+    \begin{itemize}
+      \item Frame: All residents of Olmsted County, Minnesota.  A complete
+        census is available through the Rochester Epidemiology Project
+      \item Sample: An age and sex stratified sample was invited to join
+        the study, those who agree were scheduled for an intake visit.  Return
+        visits at 15 month intervals.
+      \item At each visit, a subject is invited to participate in imaging. About
+        40\% agree.
+      \item See Roberts et al (PMID:18259084) for details.
+    \end{itemize}   
+\end{itemize}
+
+<<dementia>>=
+library(mshmm)
+table2 <- function(...) table(..., useNA= "ifany")
+
+# dim(mcsa)
+# 40939 294
+dim(dementia)
+table(table(dementia$ptnum))
+subset(dementia, ptnum<3)
+table2(dementia$dx)
+first <- subset(dementia, !duplicated(ptnum))
+table2(first$dx)
+@ 
+
+<<table>>=
+survcheck(Surv2(age, dx) ~1, id=ptnum, data=dementia)
+prog <- survfit(Surv2(age, dx) ~ male, dementia, id=ptnum,
+                start.time= 73, p0=c(1,0,0,0,0,0))
+prog
+dim(prog)
+
+plot(prog, lty=1:2, col=rep(1:6, each=2), lwd=2, xmax=100,
+      xlab="Age", ylab="p(t)")
+@ 
+
+This isn't really what I want, which is curves of the underlying patient
+state, not curves of my diagnosis pathway.
+Start simpler with states of not demented (ND), dementia, and death.
+
+<<nd1>>=
+dem2 <- dementia
+temp <- c(1,2,2,3,2,3,4)[as.numeric(dem2$dx)]
+dem2$dstate <- factor(temp, 1:4, c("alive", "ND", "dementia", "death"))
+with(dem2, table2(dstate, dx))
+survcheck(Surv2(age, dstate, repeated=TRUE) ~1, dem2, id=ptnum)
+
+dsurv <- survfit(Surv2(age, dstate) ~ male, dem2, id=ptnum,
+                 p0=c(1,0,0), start.time=65)
+plot(dsurv, col=1:2, lty=1, lwd=2, xmax=100,
+     xlab="Age", ylab="p(t)")
+@
+
+What is the effect of repeated=TRUE?
+\begin{itemize}
+  \item survcheck: more information in the transitions table, count table is
+    not useful
+  \item survfit: none
+  \item coxph: large. We are treating repeated ND visits like repeated infections
+\end{itemize}
+
+I'd like to recreate the 2022 analysis in Jack, Therneau, et al, PMID:35310829,
+and for that need to go one step further and use ever dementia (but not dead)
+as the second state.  That is, no reversion from dementia to ND.
+
+<<domax>>=
+# There must be a less mysterious way to create dstate2...
+temp1 <- as.numeric(dem2$dstate)
+temp2 <- unlist(tapply(temp1, dem2$ptnum, 
+                       function(x) ifelse(x==1, 1, cummax(x))))
+dem2$dstate2 <- factor(temp2, 1:4, c("alive", "ND", "dementia", "death"))
+survcheck(Surv2(age, dstate2) ~1, dem2, id=ptnum)$tran
+
+dsurv2 <- survfit(Surv2(age, dstate2) ~ male, dem2, id=ptnum,
+                 p0=c(1,0,0), start.time=65)
+plot(dsurv[,2], col=1:2, lwd=2, xmax=100, 
+     xlab="Age", ylab="P(alive and demented")
+lines(dsurv2[,2], col=3:4, lwd=2)
+@ 
+
+\section{Age scale}
+In epidemiology studies there is a common dichotomy of match vs model
+\begin{itemize}
+  \item Match: Critical variable, we want to adjust for it in the most complete
+    way. A coefficient or p-value is not needed
+  \item Model: Describe the effect of this variable on the outcome via 
+    parameters.
+  \item Common: match (stratify) on age and sex
+\end{itemize}
+
+<<ages>>=
+first <- subset(dementia, !duplicated(ptnum))
+hist(first$age, nclass=30, xlab="Enrollment age", main=NULL)
+last <- subset(dementia, !duplicated(ptnum, fromLast=TRUE))
+hist(last$age-first$age,  nclass=30, xlab="Years of FU", main=NULL)
+
+matplot(50:99, 36525*survexp.mn[51:100,, "2015"], type='l', lty=1, lwd=2,
+        col=2:1, log='y',
+        xlab="Age", ylab="Death rate per 100 per year")
+@  
+
+\begin{itemize}
+ \item Age is a dominating factor, we need to get it right, 
+   we don't need a p-value.
+ \item For a coxph model on Surv(age1, age2) scale, each term of the likelihood
+   compares a death at age $a$ to all those alive and under observation at 
+   age $a$.
+ \item  A Cox model on time-since-enrollment scale matches on time since 
+   enrollment.  For the MCSA, this is the time since you got a letter in the
+   mail.
+ \item The splicing assumption \ldots
+\end{itemize}
+
+<<splice>>=
+plot(dsurv, cumhaz=2:4, fun= function(y) sqrt(y), 
+     col=1:2, lty=c(1,1,2,2,3,3),lwd=2, xmax=100, 
+     xlab="Age", ylab="Cumulative hazard")
+@ 
+
+\section{Suvivial data: simple vs counting process vs timeline}
+The survival package started out with a simple Surv(time, status),
+where status is 0/1 = censored/dead, or FALSE/TRUE, or 1/2.
+
+When a need for time-dependent covariates arose we added the counting
+process form (time1, time2, status, x1, x2, \ldots):
+\begin{itemize}
+  \item Over the interval (time1, time2], this is the value of the covariates
+    x1, x2, \ldots
+  \item status = an event at time2
+  \item The square brackets are important, and reflect the fact that covariates
+    need to be a predictable process.
+\end{itemize}
+\begin{align}
+ PL &= \prod_{i \in D} \frac{dN_i(t) e^{X_i(t)\beta}}{\sum_j Y_j(t) e^{X_j(t)\beta}} \\
+    &= \prod_{i \in D} \frac{e^{X_i(t)\beta}}{\sum_j Y_j(t) e^{X_j(t)\beta}} dN_i(t)
+\end{align}
+A subject could have multiple rows, all but the last with status 0.
+
+Then it was then pointed out that this form naturally accomodates time dependent
+strata.  A couple years later we realized that it naturally handles the
+Andersen-Gill model.  Later we realized we could do mult-state.
+
+There are several oddities which will catch you.
+\begin{enumerate}
+  \item The data for each subject needs to describe an actual observable timeline
+  \item Say a subject has observations as 0, 10, 36, 50 with diabetes at time
+    36. If diabetes is a covariate it will first by 1 in the (36,50] line,
+      if it is an endpoint then in the (10,36] line of data: tdc() vs event()
+        in tmerge
+  \item For each subject we first have to define a time window.
+  \item Tmerge calls have to be sequential
+\end{enumerate}
+
+The msm and mshmm packages want a different form, which I call ``timeline data''.
+Every row has an (id, time) pair, along with all the covariates known at that
+time.  This data form is a bit odd for ordinary survival: everyone will have
+two lines, the first at time 0 with covariates and status= alive, the second
+at death or last fu, often with all covariates missing except status.
+
+But for multistate data, the timeline data sets are much easier to create.
+(You don't need tmerge).
+Much of the survival package can deal with either, I'm working on making this
+``all''.  
+
+<<dem2c>>=
+# make a counting process form of the dementia data
+# It is easiest to do it in "time since enroll" scale, then convert
+indx <- match(dem2$ptnum, dem2$ptnum)
+dem2$year <- dem2$age - dem2$age[indx]
+
+t1 <- subset(dem2, !duplicated(ptnum), c(ptnum, year, male, educ, any.e4))
+t2 <- subset(dem2, !duplicated(ptnum, fromLast=TRUE), c(ptnum, year,dx))
+dem2$dtemp <- with(dem2, nostutter(ptnum, dstate2, censor="alive"))
+
+dem2c <- tmerge(t1, t2, id=ptnum, death= event(year, dx=="death"))
+dem2c <- tmerge(dem2c, subset(dem2, duplicated(ptnum, fromLast=TRUE)), 
+                id=ptnum, cmc= tdc(year, cmc),
+                centiloid= tdc(year, centiloid), p.tau181= tdc(year, p.tau181),
+                hpvol= tdc(year, hpvol), memory= tdc(year, memory),
+                global= tdc(year, global), dstate2 = event(year, dtemp),
+                priordem= cumtdc(year, 1*(dstate=='dementia')))
+dem2c$dstate2[dem2c$death] <- "death"
+xx <- with(dem2, unlist(tapply(as.numeric(dstate), ptnum, cummax)))
+xx <- xx[duplicated(dem2$ptnum, fromLast=TRUE)]
+dem2c$cstate <- factor(xx,2:3, c("ND", "dementia"))
+
+subset(dem2, ptnum==14, c(ptnum, year, male, memory, dstate2))
+subset(dem2c, ptnum==14, c(ptnum, tstart, tstop, male, memory, 
+                           cstate, dstate2, priordem))
+indx <- match(dem2c$ptnum, dem2$ptnum)
+dem2c$age1 <- dem2c$tstart + dem2$age[indx]
+dem2c$age2 <- dem2c$tstop  + dem2$age[indx]
+
+survcheck(Surv(age1, age2, dstate2) ~ 1, dem2c, id=ptnum, istate=cstate)
+@ 
+      
+Also interesting is the probability of ever having dementia.
+An easy trick to do this is to ignore any followup after a dementia
+diagnosis.
+
+<<everdem, eval=FALSE>>=
+dsurv3 <- survfit(Surv(age1, age2, dstate2) ~male, dem2c,id= ptnum,
+                  istate= cstate, 
+                  subset=(priordem==0), p0=c(1,0,0), start.time=65)
+plot(dsurv3[,-1], col=1:4, lwd=2, xmax=100,
+     xlab="Age", ylab="Prob")
+legend(65, .5, c("Ever dem, F", "Ever dem, M", "Death w/o dem, F",
+                 "Death w/o dem, M"), col=1:4, lwd=2)
+@ 
+
+\section{Assessing amyloid}
+A key question of the paper was the effect of amyloid levels on the
+progression to dementia. Is this expensive test worth doing?
+Key issues:
+\begin{itemize}
+  \item Age is the most important covariate
+  \item Presence of one or more $\epsilon$4 alleles in the APOE gene are
+    known to increase the risk of dementia.  Some of that may be via
+    increased amyloid deposition.
+  \item There is a known sex*APOE interaction, with respect to the effect.
+  \item About 40\% of the subjects have amyloid. There was prior work using
+    categorical amyloid.
+  \item The PiB tracer did not become available until partway into the MCSA,
+    those who have amyloid don't all start imaging at visit 0.
+\end{itemize}
+
+<<dcox1>>=
+temp <- ifelse(is.na(dem2c$centiloid), 0,
+               as.numeric(cut(dem2c$centiloid, c(-100, 22, 68, 400))))
+dem2c$agrp <- factor(temp, c(1:3, 0), c("low", "moderate", "high", "missing"))
+fit1 <- coxph(list(Surv(age1, age2, dstate2) ~ male + any.e4 + agrp + cmc,
+                   1:2 ~ male*any.e4), dem2c, id= ptnum, istate=cstate)
+@ 
+
+\end{document}
