@@ -1,0 +1,277 @@
+\documentclass{article}[12pt]
+\usepackage{amsmath}
+\usepackage{amssymb}
+\addtolength{\textwidth}{1in}
+\addtolength{\oddsidemargin}{-.5in}
+\setlength{\evensidemargin}{\oddsidemargin}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\title{Mayo Clinic Study of Aging, part 2}
+\author{Terry Therneau}
+\date{21 May 2026}
+
+\begin{document}
+
+\maketitle
+
+<<echo=FALSE>>=
+library(knitr)
+opts_chunk$set(comment=NA, tidy=FALSE, highlight=TRUE, echo=TRUE,
+               fig.with=7, fig.height=5.5, fig.path="figures/",
+               out.width="\\textwidth", out.height="!", device="pdf",
+               cache=FALSE, background="#FFFFFF",
+               warning=FALSE)
+options(width=60, continue=" ")
+
+@ 
+\section{Assessing amyloid}
+A key question of the paper was the effect of amyloid levels on the
+progression to dementia. Is this expensive test worth doing?
+Key issues:
+\begin{itemize}
+  \item Age is the most important covariate
+  \item Presence of one or more $\epsilon$4 alleles in the APOE gene are
+    known to increase the risk of dementia.  Some of that may be via
+    increased amyloid deposition.
+  \item There is a known sex*APOE interaction, with respect to the effect.
+  \item About 40\% of the subjects have amyloid. There was prior work using
+    categorical amyloid.
+  \item The PiB tracer did not become available until partway into the MCSA,
+    those who have amyloid don't all start imaging at visit 0.
+\end{itemize}
+
+\section{Hazard ratios}
+<<primary>>=
+library(survival)
+library(mshmm)
+library(splines)
+table2 <- function(...) table(..., useNA= "ifany")
+options(show.significant.stars = FALSE)
+
+dx2 <- factor(c(1,2,2,3,2,3,4)[as.numeric(dementia$dx)], 1:4,
+              c("alive", "ND", "dementia", "death"))
+table2(dementia$dx, dx2)
+
+if (packageVersion("survival") >= "3.8-7") {
+    survcheck(Surv(age, dx2) ~1, dementia, id= ptnum)$transitions
+
+    # create the simpler endpoint of not demented (ND), ever dementia, death
+    temp <- unlist(tapply(as.numeric(dx2), dementia$ptnum, function(z)
+        ifelse(z==1, 1, cummax(z))))
+    dx2 <- factor(temp, 1:4, levels(dx2))
+    survcheck(Surv(age, dx2) ~1, dementia, id= ptnum)$transitions
+
+    dem2 <- timeline2counting(Surv(age, dx2) ~ ., data=dementia, id=ptnum)
+    subset(dem2, ptnum <3, -c(p.tau181, memory, global, hpvol))
+
+    # Add in amyloid group of low/med/high/missing
+    temp <- with(dem2, ifelse(is.na(centiloid), 4, 
+                              cut(centiloid, c(-50, 25, 68, 500))))
+    dem2$agrp <- factor(temp, 1:4, c("low", "mod", "high", "miss"))
+    table(dem2$agrp)
+
+    # add in time since enrollment as 0-1, 1-4, 4+ years, with 4+ as reference
+    indx <- match(dem2$ptnum, dem2$ptnum)
+    dem2$year1 <- dem2$age1 - dem2$age1[indx]
+    dem2$year2 <- dem2$age2 - dem2$age1[indx]
+    dem3 <- survSplit(Surv(year1, year2, dx2) ~ ., data=dem2,
+                      cut=c(1,4), episode= "dxyr")
+
+    dem3$dxyr <- factor(dem3$dxyr, c(3,1,2), c("4+", "0-1", "1-4"))
+    indx <- match(dem3$ptnum, dem3$ptnum) 
+    dem3$age1 <- dem3$year1 + dem3$age1[indx]
+    dem3$age2 <- dem3$year2 + dem3$age1[indx]
+
+    # education per 4 years
+    dem3$edu4 <- dem3$educ/4
+    dem3 <- subset(dem3, !is.na(edu4))
+} else dem3 <- readRDS("data/dem3.rds")
+
+survcheck(Surv(age1, age2, dx2) ~ 1, data=dem3, id=ptnum, istate=istate)
+
+fit1 <- coxph(list(Surv(age1, age2, dx2) ~ male + any.e4 + agrp + cmc + edu4,
+              1:2 ~ male*(any.e4 + agrp),
+              1:3 ~ dxyr),  data=dem3, id=ptnum, istate= istate)
+print(fit1, digits=2)
+
+print(coef(fit1, matrix=TRUE), digits=2)
+
+fit1$cmap
+@ 
+
+Because of the interactions, simple coefficients for the key variables
+(male, e4, amyloid) that affect the ND:dementia transition 
+are difficult to interpret.
+A cleaner approach is to compute and contrast predicted values, which have the
+further advantage that they are invariant to how dummy variables are coded.
+The contrast.R file contains a simple function for computing these predicted
+values and their standard errors, and marginal.Rnw contains a longer discussion
+of the concepts.  Because education and CMC are additive in the model, we can
+choose any value for them in the dummy data, the contrast is invariant.
+
+<<contrast>>=
+source("contrast.R")
+dummy <- expand.grid(any.e4= 0:1, agrp=c("low", "mod", "high", "miss"), 
+                     male=0:1, dxyr="4+", edu4=3, cmc=1)
+
+# get overall population counts for the categories
+temp <- with(dem3, table(any.e4, agrp, male))
+wt <- as.vector(temp/ sum(temp))
+
+# The contrast function isn't yet quite smart enough for multistate.
+#  But we only need to use it for the ND:dementia transition, so so a
+#  sub fit.
+fit1a <- coxph(Surv(age1, age2, dx2=="dementia") ~ male*(any.e4 + agrp) +
+                   cmc+ edu4,  data= dem3, ties="breslow",
+               subset=(istate=="ND"))
+round(rbind(coef(fit1a), coef(fit1)[1:11]), 4)
+
+
+cmat <- contrast(fit1a, dummy, weight=wt)
+yy1 <- cmat[,1] + outer(cmat[,2], c(0, -1.96, 1.96), '*')
+
+# the other, non-interaction coefs
+temp <- summary(fit1)$conf.int
+yy2  <- log(temp[-c(1:5, 8:11), c(1,3,4)])
+@ 
+
+Now create the plots.  First create labels for the columns
+
+<<hazardplot>>=
+p1 <- outer(c("F", "M"), c( "-low", "+low", "-mod", "+mod", "-high", "+high", 
+               "-miss", "+miss"), paste0)
+p1 <- c(t(p1), "+2 CMC", "edu4")
+jj <- grepl("cmc", rownames(yy2))
+yy2[jj,] <- yy2[jj,] *2
+
+opar <- par(mar=c(5,6,1,1))
+
+z1 <- exp(rbind(yy1[c(1:6, 9:14),], yy2[1:2,]))
+matplot(z1, 1:14, type='n', log='x', xlab="Hazard Ratio", ylab="",
+        yaxt='n')
+pp1 <- p1[c(1:6, 9:14, 17:18)]
+axis(side=2, 1:14, pp1, las=2, cex.axis=1)
+
+points(z1[,1], 1:14, pch=19)
+segments(z1[,2], 1:14, z1[,3],1:14)
+abline(v=1, lty=2)
+abline(h=c(6.5, 12.4), lty=3)
+par(opar)
+@ 
+
+The above plot is nearly identical to the top panel of figure 2 in Jack 2022.
+The dementia data in the package is not the data set used in 
+the paper, but is heavily based on it, e.g., the same pattern of visits (fraction
+with 1, 2, etc.), but fewer subjects, no dates, artificial subject identifiers, 
+random noise added to all continuous variables and to all between visit time 
+intervals, times rounded to .1 year, \ldots.  
+The final data set is intended to be a
+close enough simulant for the exploration of statistical issues. 
+It should not be used for medical decision making.
+
+Below is a plot that includes all the hazard ratios.
+
+<<hplot2>>=
+z2 <- exp(rbind(yy1, yy2))
+p2 <- c("male", "e4", "mod", "high", "miss", "+2 CMC", "edu4")
+p2 <- c(p2, "yr 1", "yr 2-4", p2)
+
+opar <- par(mar=c(5,5,1,1))
+matplot(z2, 1:34, type='n', log='x', xlab="Hazard Ratio", ylab="",
+        yaxt='n')
+axis(side=2, 1:34, c(p1,p2), las=2, cex.axis=.7)
+points(z2[,1], 1:34, pch=19, col=rep(1:3, c(18, 9,7)))
+segments(z2[,2], 1:34, z2[,3],1:34, col=rep(1:3, c(18, 9,7)))
+abline(v=1, lty=2)
+segments(c(.3, .3), c(8.5, 16.5), c(3,3), c(8.5, 16.5), lty=3)
+abline(h=c(18.5, 27.5), lty=2)
+text(c(.3, .3, .3), c(13, 23, 32), col=1:3, 
+     c("ND:dementia", "ND: death", "dementia:death"))
+par(opar)
+@ 
+
+\section{Event rates}
+Overall hazard rates can be computed using a simple poisson regression.
+
+<<rates>>=
+tdata <- survSplit(Surv(age1, age2, dx2) ~ ., data=dem3, cut=51:99)
+
+delta <- tdata$age2 - tdata$age1  # interval length
+rate1 <- glm(I(dx2=="dementia") ~ male + ns(age1,3) + offset(log(delta)),
+             data=tdata, poisson, subset= (istate=="ND"))
+rate2 <- glm(I(dx2=="death") ~ male + ns(age1,3) + dxyr + offset(log(delta)),
+             data=tdata, poisson, subset= (istate=="ND"))
+rate3 <- glm(I(dx2=="death") ~ male + age1 + offset(log(delta)),
+             data=tdata, poisson, subset= (istate=="dementia"))
+dummy <- expand.grid(age1=50:99, male=0:1, dxyr = "4+", delta=1000)
+yhat1 <- matrix(predict(rate1, newdata=dummy, type="response"), ncol=2)
+yhat2 <- matrix(predict(rate2, newdata=dummy, type="response"), ncol=2)
+yhat3 <- matrix(predict(rate3, newdata=dummy, type="response"), ncol=2)
+
+matplot(50:99, cbind(yhat1, yhat2, yhat3), log='y',type='l', lwd=2, 
+        lty=c(1,1,2,2,3,3), col=1:2, yaxt='n', 
+        xlab= "Age", ylab="Rate per 1000 person-years")
+axis(2, c(.001, .1, 1, 10, 100, 1000), c(".001", ".1", "1", "10", "100", "1000"),
+     las=2)
+legend(80, .1, c("ND:dementia", "ND: death", "dementia:death",
+                 "Minnesota death"), lty=c(1:3,0), pch=c(NA,NA,NA,16), bty='n')
+xx <- seq(50,95, 5)
+matpoints(xx, survexp.mn[xx+1,,"2010"]*365250, col=2:1, pch=16)
+@ 
+
+The dementia rate for males is just a smidge higher than females, 7\%, (10\% in
+the real data, neither is statistically significant).
+The death rates for males are estimated at 1.5 and 1.2 times female rates in
+the non-demented and demented, respectively.
+
+\section{Absolute risk}
+For survival curves, my stance for several decades had been that ``survival
+curves for a time-dependent covariate are an oxymoron''.
+My standard response was to use landmarking, i.e., use a time-fixed covariate
+at the origin of the curve.
+A realization when doing this analysis was that when using age as the time
+scale, this approach simply doesn't work.
+Consider the curve for a 65 year old with low amyloid, as in figure 3 of the
+paper.  The median follow-up time in the data is 7.6 years.
+This means that most of the subjects contributing data to the 85-90 portion 
+of that curve, for example, were mrecruited at ages of 79--85.  The amyloid at
+study entry for these is an amyloid at 79 to 85.
+A naive curve using ``baseline amyloid'' of 25 centiloids corresponds to
+a population of subjects whose amyloid can start to progress, 
+but each is regularly replaced by a rejuninated copy whose amyloid has not.
+This curve does not represent anybody.
+
+How does one create a predicted survival curve for a 65 year old e4- male
+whose current amyloid level is 25 centiloids, from a model that used amyloid
+as a time-dependent covariate.  This requires that we first predict the
+progression of amyloid over time, and then use that in prediction of survival.
+The 2022 paper used an ad hoc version of this based on our long experience with
+using US life tables.
+
+The life table is a large array containing death rates by age, sex, and
+calendar year. To create the predicted survival to age 80 for a 48.2 year 
+old female starting on 6-6-2000, 
+fetch the appropriate 1 day of hazard from the table,
+increment age and calendar year by 1 day, fetch the appropriate value, 
+increment, \ldots until we reach the ending age. Accumulate this to create
+a cumulated hazard $\Lambda(t)$, the predicted survial is $\exp(-\Lambda(t))$.
+The pyears and survexp routines of the survival package implement exactly
+this algorithm.
+
+For the dementia data, first use the fitted multistate model to create a 
+death rate table by integer age, amyloid (4 levels) and CMC (8 levels); 
+paralleling the structure of US rate tables. 
+We then used Poisson models to compute predicted amyloid state occupancy over
+time for a given starting age and state, and likewise for CMC state.
+Whereas age and sex for subjects in the usual survexp computation procede
+forward in lockstep, here each forward step of one year implies an
+updated distribution over states, 
+and a weighted average of the death rates was added to the cumulative hazard.
+Only later did we realize that this entire bookkeeping process mimics a
+multistate Aalen-Johansen estimate, and could be approach from that direction.
+
+Yet to be done: compute the predicted curves using this method.
+
+\end{document}
+
+

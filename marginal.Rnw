@@ -1,0 +1,391 @@
+\documentclass[12pt]{article}
+\usepackage{amsmath}
+\title{Marginal estimates}
+\author{Terry Therneau}
+\newcommand{\code}[1]{\texttt{#1}}
+\addtolength{\textwidth}{1in}
+\addtolength{\oddsidemargin}{-.5in}
+\setlength{\evensidemargin}{\oddsidemargin}
+
+<<echo=FALSE, message=FALSE>>=
+library(survival)
+options(show.signif.stars = FALSE)
+opts_chunk$set(comment=NA, tidy=FALSE, highlight=FALSE, echo=TRUE,
+               fig.with=7, fig.height=5, fig.path="figures/",
+               out.width="\\textwidth", out.height="!", device="pdf",
+               cache=FALSE, background="#FFFFFF",
+               warning=FALSE, error=FALSE)
+
+table2 <- function(...) table(..., useNA="ifany")
+
+# grab Emily's pre-made data set
+load("../data/data2-for-terry.Rda")  # creates data2
+data2$educ <- pmax(11, data2$educ)  # match the EL analysis
+@
+\begin{document}
+\maketitle
+
+\section{Contrasts}
+Steve's comment that he was ``reminded how involved the CIs and p-values 
+are in the multi-state framework and that all the computations take a 
+lot of custom code'' has prompted this note.
+The issues are not that difficult, I think, but then I have spent a lot of time
+in the last several years thinking about them.
+This note is an attempt to clarify.
+
+Principle 1: Predicted values are central.
+When we describe the effect of a covariate in a model, the underlying question
+is ``how does this covariate affect $\hat y$, the predicted value?''
+The simplest effect to describe is on the linear predictor $X\beta$.
+If a model is additive, then this is particularly simple.
+Consider the following fit using \code{data2}, the main analysis data set for
+this paper.
+
+<<fit1>>=
+fit1 <- coxph(Surv(age1, age2, state=="death") ~ male + educ + icmc, data2)
+fit1
+@  
+
+For two covariate vectors $x_1$ and $x_2$ the change in $X\beta$ going
+from $x_1$ to $x_2$ is
+$c= (x_2 - x_1)\beta$ with estimated variance 
+${\rm var}(c) = (x_2-x_1)V (x_2-x_1)'$, 
+where $V$ is the variance-covariance matrix of the elements.
+For the question ``what is the effect of sex, holding everything else the
+same'', choose $x_2$ and $x_1$ as vectors that differ only in the first
+element, $x_2-x_2 = c(1, 0, 0)$, and $c$ will be precisely the printed
+coefficient for \code{male} in the model above.
+It's standard error reads directly off the printout as well.
+For a continuous variable like education, the impact of a change from 12 to 13
+years is numerically the same as the change from 15 to 16, 
+and simplifies to the coefficient for education. 
+
+Principle 2: It isn't always so simple to compute.
+As statisticians we have gotten very used to the simple case, to the point where
+we talk about constrasts \emph{in the coefficients}.
+But that approach gives scant guidance for more complex cases.
+Consider for instance a model with interactions, i.e., the model for ND:dementia
+from the paper.
+
+<<fit2>>=
+fit2 <- coxph(Surv(age1, age2, state=="dementia") ~ apoepos*male + iclgp*male +
+                  icmc + educ, data=data2, subset= (cstate=="ND"))
+fit2
+@ 
+
+The effects of CMC and education are additive and can still be read directly 
+off of the coefficients table,
+but those for sex, apoe, and amyloid (iclgp) can not.
+Because of the interactions, the 16 combinations of M/F, APOE +-, and amyloid
+of low/moderate/high/missing are each their own effect.  
+To present those to our audience:
+\begin{enumerate}
+  \item We need to decide what contrasts to show (there are 16*15/2 
+possibilities).
+  \item Predicted values are independent of how dummy variables are coded.
+However, we need the dummy variables for the intermediate compuation.
+  \item R should have a contrast function, but it doesn't.
+\end{enumerate}
+
+The lack of a contrast function in R goes all the way back to the Statistical
+Models in S book, where the authors decided to focus on \emph{how} dummy 
+variables would be coded, assuming that with the correct choice one could
+always read the desired
+coefficient values and standard error from the printout.
+This was a short sighted choice that does not allow for more complex questions.
+The function below focuses on prediction: it's primary arguments are an
+existing fit and a new
+data set with rows for hypothetical subjects.
+It then either compares the predictions for each row to the data set to the
+first row, globally compares all rows to each other, or
+compares each row to a weighted average of the rows.
+(Essentially, the default argument for weight is 1, 0, 0, \ldots).
+The \code{model.matrix} function returns an $X$ matrix in the proper coding,
+the \code{coef} function returns the coefficients and \code{vcov} the
+variance-covariance matrix of the model.
+
+<<contrast>>=
+contrast <- function(fit, data, global=FALSE, weight, 
+                     tol=sqrt(.Machine$double.eps)) {
+    newx <- model.matrix(fit, data= data)
+    if (global)  # test for all differences =0
+        newx <- scale(newx[-1,], center=newx[1,], scale=FALSE)
+    else {    
+        if (missing(weight))  # subtract first row
+            newx <- scale(newx, center=newx[1,], scale=FALSE) 
+        else  { # use a weighted average
+            wt <- weight/sum(weight)# use a weighted average
+            if (length(wt) != nrow(newx)) stop("wrong length for weight")
+            newx <- scale(newx, center= wt %*% newx , scale=FALSE)
+        }
+    }
+    test <- drop(newx %*% coef(fit))
+    V    <- newx %*% vcov(fit) %*% t(newx)
+    if (global) {
+        stemp <- svd(V)
+        nonzero <- (stemp$d > tol)
+        ctemp <- test %*% stemp$u[,nonzero]
+        chi <- ctemp %*% diag(1/stemp$d[nonzero]) %*% c(ctemp)
+        c(chisq= drop(chi), df= sum(nonzero))
+    }
+    else {
+        std <- sqrt(diag(V))
+        z <- ifelse(std==0, 0, test/std)
+        cbind(estimate=test, std.err=std, z= z)
+    }
+}
+@
+
+The following code will compare each row to the first, followed by a
+global test.  We have omitted the estimates for the iclgp= missing group,
+which are not relevant to the main point of the paper.
+
+It is easy to verify that the results are invariant to our choice of values
+for education and/or icmc. 
+
+<<test1>>=
+dummy <- expand.grid(apoepos=0:1, iclgp=c("low", "moderate", "high"), male=0:1,
+                     educ=12, icmc=2)
+contrast(fit2, dummy)
+
+contrast(fit2, dummy, global=TRUE)
+@ 
+
+For the 12 groups, we can also use the global population for our comparator.
+One effect of this is to center the CI estimates around 0.
+The choice of whether we include the missing amyloid group in that population
+average is an interesting one and I don't have a watertight rationale.
+I've chosen to not use them, since we are not displaying them.
+Take care to use an average of people rather than of observations, however,
+as the definition of the global population.
+
+<<pop>>=
+nomiss <- subset(data2, !is.na(pib))
+first <- subset(nomiss, !duplicated(ptnum))   # first obs with PIB
+count <- with(first, table(apoepos, iclgp, male))
+wcon1 <- contrast(fit2, dummy, weight=count[, 1:3,])
+@ 
+
+What if we used everyone for the population, not just those with
+amyloid?
+Because some who had PET did not have it as their first visit, we have
+to be careful to use the first PET visit for those, first study visit for 
+the others.  The result is a matrix of counts whose \code{[,1:3,]}
+dimension is identical to what was before.  Thus there is no change
+in the result.
+
+<<pop2>>=
+f2 <- subset(data2, !duplicated(ptnum))
+f2 <- subset(f2, !(ptnum %in% first$ptnum))  # first for non PET
+f3 <- rbind(first, f2)
+count2 <- with(f3, table(apoepos, iclgp, male))
+wcon2 <- contrast(fit2, dummy, weight=count2[,1:3,])
+
+# Naive: those who didn't start with PET show up as missing ICL
+f2 <- subset(data2, !duplicated(ptnum))
+count3 <- with(f2, table(apoepos, iclgp, male))
+wcon3 <- contrast(fit2, dummy, weight=count3[, 1:3,])
+
+matplot(cbind(wcon1[,1], wcon2[,1], wcon3[,1]), 1:12, 
+        xlab="Weighted hazard ratio", ylab= "Group")
+@ 
+
+It was important to have the arguments of table in the same order as those
+to expand.grid, so that the weights line up.
+As before, the constant value that we use for education or icmc in the 
+dummy data frame can be any value that we want, since it cancels out when
+we subtract rows.
+
+The wcon1 data can be used to recreate the confidence interval plot from
+the paper.
+<<redo>>=
+hr <- exp(wcon1[,1] + outer(wcon1[,2], c(0, -1.96, 1.96), '*'))
+yy <- c(1:6, 8:13)
+oldpar <- par(mar=c(5,7,1,1))
+matplot(hr, yy, pch='o||',  log='x', col=1, 
+        xlab="Hazard ratio", yaxt='n', ylab='')
+segments(hr[,2], yy, hr[,3], yy)
+axis(2, yy, paste0(ifelse(dummy$male==0, 'F', 'M'),
+                   ifelse(dummy$apoepos==0, '-', '+'), dummy$iclgp), las=2)
+
+@ 
+
+Comparing two rows from the result of a contrast call, to each other,
+is the same as comparing those two rows of the dummy data set to each other to
+start with.  
+That is, if I want to compare rows 7 and 8 to each other, then simply
+call the contrast function with data rows 7 and 8.  It does not matter
+if the original call had used a weighted population or not.
+
+\section{Two averages}
+In the paper, Dr. Jack makes the statment that APOE has an effect in each of
+the 6 subsets, and that the size of this effect is larger for females than
+for males.  
+To get p-values that back up the first statement, the supplemental material
+has a table of all 16(15)/2 = 120 pairwise comparisons.  This can be 
+assembles using multiple calls to \code{constrast}, setting the weight
+argument to (1, 0,0, \dots), (0, 1, 0, \ldots), etc. so that row 1, row 2,
+etc sequantially becomes the comparitor group.
+
+For the second statement we need a function that compares two weighted 
+estimates, or equivalently gives a single weighted sum,
+that is, for 
+(female A+ -female A-) - (male A+ - male A-).  Again, since the sizes of
+the ICL groups is quite different, we want to use weighted averages.
+For the contrast function above it did not matter whether we weighted by
+counts or percentages --- the weight is internally normed to 1 --- but here
+we need to be a bit more careful.
+<<>>=
+cwt <- array(0, dim=c(2,3,2), 
+             dimnames=list(c("A-", "A+"), c("low", "moderate", "high"),
+                           c("F", "M")))
+iclwt <- apply(count, 2, sum)
+iclwt <- iclwt[1:3]/sum(iclwt)
+
+cwt[1, 1:3, 1] <- -iclwt # F- weights
+cwt[2, 1:3, 1] <-  iclwt # F- weights
+cwt[1, 1:3, 2] <-  iclwt # M- weights
+cwt[2, 1:3, 2] <- -iclwt # M+ weights
+cwt # print it out to make sure it is good
+cwt <- as.vector(cwt)  # it needs to be a constrast vector
+
+estimate <- function(fit, data, cmat, tol=sqrt(.Machine$double.eps)) {
+    newx <- model.matrix(fit, data= data)
+    contr <- cmat %*% newx
+    test <- drop(contr %*% coef(fit))
+    V    <- contr %*% vcov(fit) %*% t(contr)
+    std <- sqrt(diag(V))
+    z <- test/std
+    cbind(contrast= test, std=std, z=z)
+}
+
+cmat <- rbind(F= c(cwt[1:6], rep(0,6)), M= c(rep(0,6), -cwt[7:12]),
+              '1 vs 2' = cwt)
+est1 <- estimate(fit2, dummy, cmat)
+est1
+zci <- c(HR=0, lower= -1.96, upper=1.96)
+exp(est1[,1] + outer(est1[,2], zci, '*'))
+2* pnorm(-abs(est1[,3]))
+@ 
+This shows that the comparsion of F+ vs F-, weighted by overall prevalence
+of ICL group, has a contrast of .85; or a hazard ratio of exp(.85)= 2.3.
+The M+ vs M- difference is smaller at .34, and the difference between .85 and
+.34 is also significant.
+
+Further ones from the paper
+<<further>>=
+#low/moderate/high, M and F, weigthed by APOE
+apoe.n <- table(first$apoepos)
+apoe.pct <- apoe.n/sum(apoe.n)
+tmp <- matrix(0, 12, 4, dimnames=list(NULL, c("Fmod/low", "Fhigh/mod",
+                                              "Mmod/low", "Mhigh/mod")))
+tmp[1:4, 1] <- c(-apoe.pct, apoe.pct)
+tmp[3:6, 2] <- c(-apoe.pct, apoe.pct) 
+tmp[7:10,3] <- c(-apoe.pct, apoe.pct)
+tmp[9:12,4] <- c(-apoe.pct, apoe.pct)
+est3 <- estimate(fit2, dummy, t(tmp))
+zci <- c(HR=0, lower= -1.96, upper=1.96)
+exp(est3[,1] + outer(est3[,2], zci, '*'))
+
+
+@ 
+
+\section{Multistate Cox models}
+In order to produce correct time-in-state curves, the Cox model fits for
+all three transtions have to be done all at once, saved in a single object.
+The computations for hazard rates, however, only involve one transition at
+a time.
+Thus, the contrast function above is easiest to manage if we have 3 separate
+coxph fits.  Here is the overall fit we have been using, along with the
+three separate ones.  
+There have been multiple ways of coding the interactions
+over the life of the project, e.g., \code{male*apoepos} versus a constructed 4
+level factor, or \code{educ4 = educ/4}. 
+However we code it, predicted values don't change.  Since the
+constrast function operates on predicted values, all codings will give the
+same answer.
+
+<<separate>>=
+cfit <- coxph(list(Surv(age1, age2, state) ~ male + apoepos + iclgp + educ4
+                    + icmc, 1:2 ~ male:(apoepos + iclgp), 1:3 ~ yearc),
+                    id=ptnum,  istate=cstate, data2)
+cfita <- coxph(Surv(age1, age2, state=="dementia") ~ male*apoepos +
+                          iclgp*male + icmc + educ4,  data2,
+                          subset= (cstate=="ND"))
+cfitb <-  coxph(Surv(age1, age2, state=="death") ~ male+ apoepos +
+                          iclgp + icmc + educ4 + yearc,  data2,
+                          subset= (cstate=="ND"))
+cfitc <-  coxph(Surv(age1, age2, state=="death") ~ male+ apoepos +
+                          iclgp + icmc + educ4,  data2,
+                          subset= (cstate=="dementia")) 
+@ 
+
+\section{Population comparison}
+
+The above is all very simple when the target of our estimation is the
+linear predictor $X\beta$.  When the target is a function of the linear
+predictor --- a predicted survival curve, say --- then things are more
+complicated.  The basic reason is that you can't move an expected value
+inside a function.
+
+$$
+E[f(X\beta)] \ne f(E[X\beta])
+$$
+
+One consequence of this is that the values of the other variables don't
+disappear, e.g., the difference between F+low and F-low survival curves
+with CMC=2 for both groups is not the same as the difference when CMC=3.
+We can no longer set other variables to any value we want and then
+ignore them.
+To obtain the predicted survival curve of F+low, marginally over values
+of education and CMC, all 80 curves for the CMC values of 0:7 and the
+10 values for education have to be obtained, and then the resulting curves
+can be averaged (all values $\le 11$ had been collapsed in this data set).
+Standard errors for this non-linear average currently require a jackknife or
+bootstrap.  This becomes a brute force computation.
+
+In spite of what we say above, it turns out that for predicted survival of
+a Cox model, $f$ may be remarkably close to linear.
+We have
+$$ f(\eta) = \exp(- \Lambda_0(t) \exp(\eta)) $$
+Figure \ref{nearlin} shows the transformation.
+For baseline hazards between .3 and .7 and hazard ratios of 1/2 to 2,
+which encompases the results of many clinical studies,
+the curves are quite close to linear.  
+Linearity is actually not too bad out to hazards of 1/3 and 3.
+
+\begin{figure}
+<<linear>>=
+eta <- seq(-1.4, 1.4, length=101)
+smat <- matrix(0, length(eta), 5)
+l0 <- -log(c(.9, .7, .5, .3, .1))
+for (i in 1:5)
+    smat[,i] <- exp(-l0[i]*exp(eta))
+matplot(eta, smat, type='l', lwd=2, 
+        xlab="Linear predictor", ylab="Survival")
+axis(3, log(c(.25,1/3, .5, 1, 2, 3, 4)), c("1/4", "1/3", "1/2", 1, 2, 3, 4))
+abline(v=log(c(1/3, 1/2, 1, 2,3)), lty=1, 
+       col=c("black", "black", "grey50", "black", "black"))
+@ 
+  \caption{Predicted survival for a Cox model with various levels for the
+    baseline hazard, i.e., survival at $x\beta=0$ of .1, .3, .5, .7, or .9
+    (the intersections of each curve with the vertial line at 0).
+    The upper axis shows hazard ratios.}
+  
+    \label{nearlin}
+\end{figure}
+
+Here are the quantiles of the linear predictors for the study.
+The central 60\% lie mostly in a hazard ratio of 1/2 to 2 (log(2)= .69),
+and 80\% in the 1/3 to 3 range.
+Because many of the curves for the study span much of the range from 0 to 1, and
+due to the number of risk scores outside of (-1, 1), we need to do the
+compuations in the more formally correct way, but we should not be surprised
+if the difference in results is fairly small.
+
+<<quantiles>>=
+zz <- cfit$linear.predictors
+round(quantile(zz - median(zz), c(0, .05, .1, .2, .5, .8, .9, .95, 1)), 2)
+@ 
+\end{document}
+
