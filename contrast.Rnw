@@ -18,9 +18,8 @@ opts_chunk$set(comment=NA, tidy=FALSE, highlight=FALSE, echo=TRUE,
 
 table2 <- function(...) table(..., useNA="ifany")
 
-# grab Emily's pre-made data set
-load("../data/data2-for-terry.Rda")  # creates data2
-data2$educ <- pmax(11, data2$educ)  # match the EL analysis
+# grab our mcsa data set
+dem3 <- readRDS("data/dem3.rds")
 @
 \begin{document}
 \maketitle
@@ -42,7 +41,11 @@ Consider the following fit using \code{data2}, the main analysis data set for
 this paper.
 
 <<fit1>>=
-fit1 <- coxph(Surv(age1, age2, state=="death") ~ male + educ + icmc, data2)
+library(survival)
+dem3 <- readRDS("data/dem3.rds")
+dem3$educ <- pmax(11, dem3$educ)
+
+fit1 <- coxph(Surv(age1, age2, dx2=="death") ~ male + educ + any.e4, dem3)
 fit1
 @  
 
@@ -58,7 +61,7 @@ coefficient for \code{male} in the model above.
 It's standard error reads directly off the printout as well.
 For a continuous variable like education, the impact of a change from 12 to 13
 years is numerically the same as the change from 15 to 16, 
-and simplifies to the coefficient for education. 
+which simplifies to the coefficient for education. 
 
 Principle 2: It isn't always so simple to compute.
 As statisticians we have gotten very used to the simple case, to the point where
@@ -68,15 +71,15 @@ Consider for instance a model with interactions, i.e., the model for ND:dementia
 from the paper.
 
 <<fit2>>=
-fit2 <- coxph(Surv(age1, age2, state=="dementia") ~ apoepos*male + iclgp*male +
-                  icmc + educ, data=data2, subset= (cstate=="ND"))
+fit2 <- coxph(Surv(age1, age2, dx2=="dementia") ~ male*(any.e4 + agrp) +
+                  cmc + educ, data=dem3, subset= (istate=="ND"))
 fit2
 @ 
 
 The effects of CMC and education are additive and can still be read directly 
 off of the coefficients table,
-but those for sex, apoe, and amyloid (iclgp) can not.
-Because of the interactions, the 16 combinations of M/F, APOE +-, and amyloid
+but those for sex, APOE, and amyloid (agrp) can not.
+Because of the interactions, the 16 combinations of M/F, e4 +-, and amyloid
 of low/moderate/high/missing are each their own effect.  
 To present those to our audience:
 \begin{enumerate}
@@ -96,13 +99,14 @@ This was a short sighted choice that does not allow for more complex questions.
 The function below focuses on prediction: it's primary arguments are an
 existing fit and a new
 data set with rows for hypothetical subjects.
-It then either compares the predictions for each row to the data set to the
+It then either compares the predictions for each row of the data set,
+and compares that to the
 first row, globally compares all rows to each other, or
 compares each row to a weighted average of the rows.
 (Essentially, the default argument for weight is 1, 0, 0, \ldots).
 The \code{model.matrix} function returns an $X$ matrix in the proper coding,
 the \code{coef} function returns the coefficients and \code{vcov} the
-variance-covariance matrix of the model.
+variance-covariance matrix of the model. 
 
 <<contrast>>=
 contrast <- function(fit, data, global=FALSE, weight, 
@@ -137,15 +141,15 @@ contrast <- function(fit, data, global=FALSE, weight,
 @
 
 The following code will compare each row to the first, followed by a
-global test.  We have omitted the estimates for the iclgp= missing group,
+global test.  We have omitted the estimates for the agrp= missing group,
 which are not relevant to the main point of the paper.
 
 It is easy to verify that the results are invariant to our choice of values
 for education and/or icmc. 
 
 <<test1>>=
-dummy <- expand.grid(apoepos=0:1, iclgp=c("low", "moderate", "high"), male=0:1,
-                     educ=12, icmc=2)
+dummy <- expand.grid(any.e4=0:1, agrp=c("low", "mod", "high"), male=0:1,
+                     educ=12, cmc=2)
 contrast(fit2, dummy)
 
 contrast(fit2, dummy, global=TRUE)
@@ -160,9 +164,9 @@ Take care to use an average of people rather than of observations, however,
 as the definition of the global population.
 
 <<pop>>=
-nomiss <- subset(data2, !is.na(pib))
+nomiss <- subset(dem3, !is.na(centiloid))
 first <- subset(nomiss, !duplicated(ptnum))   # first obs with PIB
-count <- with(first, table(apoepos, iclgp, male))
+count <- with(first, table(any.e4, agrp, male))
 wcon1 <- contrast(fit2, dummy, weight=count[, 1:3,])
 @ 
 
@@ -175,15 +179,15 @@ dimension is identical to what was before.  Thus there is no change
 in the result.
 
 <<pop2>>=
-f2 <- subset(data2, !duplicated(ptnum))
+f2 <- subset(dem3, !duplicated(ptnum))
 f2 <- subset(f2, !(ptnum %in% first$ptnum))  # first for non PET
 f3 <- rbind(first, f2)
-count2 <- with(f3, table(apoepos, iclgp, male))
+count2 <- with(f3, table(any.e4, agrp, male))
 wcon2 <- contrast(fit2, dummy, weight=count2[,1:3,])
 
-# Naive: those who didn't start with PET show up as missing ICL
-f2 <- subset(data2, !duplicated(ptnum))
-count3 <- with(f2, table(apoepos, iclgp, male))
+# Naive: those who didn't start with PET show up as missing agrp
+f2 <- subset(dem3, !duplicated(ptnum))
+count3 <- with(f2, table(any.e4, agrp, male))
 wcon3 <- contrast(fit2, dummy, weight=count3[, 1:3,])
 
 matplot(cbind(wcon1[,1], wcon2[,1], wcon3[,1]), 1:12, 
@@ -192,7 +196,7 @@ matplot(cbind(wcon1[,1], wcon2[,1], wcon3[,1]), 1:12,
 
 It was important to have the arguments of table in the same order as those
 to expand.grid, so that the weights line up.
-As before, the constant value that we use for education or icmc in the 
+As before, the constant value that we use for education or cmc in the 
 dummy data frame can be any value that we want, since it cancels out when
 we subtract rows.
 
@@ -206,7 +210,7 @@ matplot(hr, yy, pch='o||',  log='x', col=1,
         xlab="Hazard ratio", yaxt='n', ylab='')
 segments(hr[,2], yy, hr[,3], yy)
 axis(2, yy, paste0(ifelse(dummy$male==0, 'F', 'M'),
-                   ifelse(dummy$apoepos==0, '-', '+'), dummy$iclgp), las=2)
+                   ifelse(dummy$any.e4==0, '-', '+'), dummy$agrp), las=2)
 
 @ 
 
@@ -268,14 +272,14 @@ exp(est1[,1] + outer(est1[,2], zci, '*'))
 2* pnorm(-abs(est1[,3]))
 @ 
 This shows that the comparsion of F+ vs F-, weighted by overall prevalence
-of ICL group, has a contrast of .85; or a hazard ratio of exp(.85)= 2.3.
-The M+ vs M- difference is smaller at .34, and the difference between .85 and
-.34 is also significant.
+of amyloid group, has a contrast of .80; or a hazard ratio of exp(.80)= 2.2.
+The M+ vs M- difference is smaller at .38, and the difference between .80 and
+.38 is also significant.
 
 Further ones from the paper
 <<further>>=
 #low/moderate/high, M and F, weigthed by APOE
-apoe.n <- table(first$apoepos)
+apoe.n <- table(first$any.e4)
 apoe.pct <- apoe.n/sum(apoe.n)
 tmp <- matrix(0, 12, 4, dimnames=list(NULL, c("Fmod/low", "Fhigh/mod",
                                               "Mmod/low", "Mhigh/mod")))
@@ -299,25 +303,25 @@ Thus, the contrast function above is easiest to manage if we have 3 separate
 coxph fits.  Here is the overall fit we have been using, along with the
 three separate ones.  
 There have been multiple ways of coding the interactions
-over the life of the project, e.g., \code{male*apoepos} versus a constructed 4
-level factor, or \code{educ4 = educ/4}. 
+over the life of the project, e.g., \code{male*any.e4} versus a constructed 4
+level factor, or \code{edu4 = educ/4}. 
 However we code it, predicted values don't change.  Since the
 constrast function operates on predicted values, all codings will give the
 same answer.
 
 <<separate>>=
-cfit <- coxph(list(Surv(age1, age2, state) ~ male + apoepos + iclgp + educ4
-                    + icmc, 1:2 ~ male:(apoepos + iclgp), 1:3 ~ yearc),
-                    id=ptnum,  istate=cstate, data2)
-cfita <- coxph(Surv(age1, age2, state=="dementia") ~ male*apoepos +
-                          iclgp*male + icmc + educ4,  data2,
-                          subset= (cstate=="ND"))
-cfitb <-  coxph(Surv(age1, age2, state=="death") ~ male+ apoepos +
-                          iclgp + icmc + educ4 + yearc,  data2,
-                          subset= (cstate=="ND"))
-cfitc <-  coxph(Surv(age1, age2, state=="death") ~ male+ apoepos +
-                          iclgp + icmc + educ4,  data2,
-                          subset= (cstate=="dementia")) 
+cfit <- coxph(list(Surv(age1, age2, dx2) ~ male + any.e4 + agrp + edu4
+                    + cmc, 1:2 ~ male:(any.e4 + agrp), 1:3 ~ dxyr),
+                    id=ptnum,  istate=istate, dem3)
+cfita <- coxph(Surv(age1, age2, dx2=="dementia") ~ male*any.e4 +
+                          agrp*male + cmc + edu4,  dem3,
+                          subset= (istate=="ND"))
+cfitb <-  coxph(Surv(age1, age2, dx2=="death") ~ male+ any.e4 +
+                          agrp + cmc + edu4 + dxyr,  dem3,
+                          subset= (istate=="ND"))
+cfitc <-  coxph(Surv(age1, age2, dx2=="death") ~ male+ any.e4 +
+                          agrp + cmc + edu4,  dem3,
+                          subset= (istate=="dementia")) 
 @ 
 
 \section{Population comparison}
@@ -375,7 +379,7 @@ abline(v=log(c(1/3, 1/2, 1, 2,3)), lty=1,
     \label{nearlin}
 \end{figure}
 
-Here are the quantiles of the linear predictors for the study.
+Below are the quantiles of the linear predictors for the study.
 The central 60\% lie mostly in a hazard ratio of 1/2 to 2 (log(2)= .69),
 and 80\% in the 1/3 to 3 range.
 Because many of the curves for the study span much of the range from 0 to 1, and
