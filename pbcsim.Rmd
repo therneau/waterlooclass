@@ -1,0 +1,596 @@
+---
+title: PBC simulation
+author: Terry Therneau
+---
+
+# Mimic the bilirubin trajectories
+We want to summarize the observed bilirubin trajectories in a parametric
+way so that we can simulate from them.
+First, take a look at all those with a bilirubin measured within 7 days of
+death, something we mention in the book as a concern.
+
+```{r, setup}
+#library(survival)
+#library(lme4)
+table2 <- function(...) table(..., useNA="ifany")
+
+# Look at all the "just before death" bilirubins
+last <- subset(pbcseq, !duplicated(id, fromLast=TRUE))
+lateid <- last$id[(last$futime - last$day <=7) & last$status==2]
+late <- subset(pbcseq, id %in% lateid)
+late$year <- late$day/365.25
+
+plot(bili ~ year, late, log='y', type='n', xlab="Follow-up", ylab="bili")
+for (i in 1:length(lateid))
+    lines(bili ~ year, late, subset=(id==lateid[i]), col=i%%8, type='b',
+          pch=letters[i])
+names(lateid) <- letters[1:15]
+lateid
+```
+
+Id 57 and 114 (b, f) stand out the most starkly, especially when plotted on 
+aritmetic scale, while for some others there does not appear to be any 
+near death impact (e, k). 
+And what do we make of g?
+Our 7 day rule is perhaps conservative, removing too many, but that
+is okay: an ongoing theme is for people to *look* at their data.
+
+The hyperbola fits further down revealed other outliers such as id 200, who
+has a huge increase 12 days before death.
+
+```{r, makedata}
+# This is a copy of code from the book
+pdat0 <- subset(pbcseq, !duplicated(id))
+pdat0$age10 <- pdat0$age/10
+pdat0$bili3 <- cut(pdat0$bili, c(0,1,5,100), c("normal", "1-4", ">4"))
+pdat0$agrp  <-  cut(-pdat0$albumin, c(-100, -3.5, -3, 0),
+                   c("normal", "3-3.5", "<3"))
+pdat0$death <- 1*(pdat0$status ==2)
+
+pdata <- tmerge(pdat0[,c(1,4:6)], pdat0, id=id,
+                 death = event(futime, death),
+                 options= list(tstart="day1", tstop="day2"))
+# I have arbitrarily decided not to make use of any new lab within 7
+#  days of death.  This loses 15 bilirubin values.
+ptemp <- subset(pbcseq, !(status ==2 & (futime <= (day + 7))))
+ptemp$bili3 <- cut(ptemp$bili, c(0, 1, 4, 100), c("normal", "1-4", ">4"))
+ptemp$agrp  <- cut(-ptemp$albumin, c(-100, -3.5, -3, 0),
+                   c("normal", "3-3.5", "<3"))
+pdata <- tmerge(pdata, ptemp, id=id, edema = tdc(day, edema),
+                bili= tdc(day, bili), albumin = tdc(day, albumin),
+                protime = tdc(day, protime),
+                bili3 = tdc(day, bili3), b3= event(day, as.numeric(bili3)),
+                agrp  = tdc(day, agrp))
+
+# Now create the multistate dataset using bilirubin groups
+# 1. By definition, bilirubin can only change on 'pbcseq' days
+# 2. Don't count two visits in the same state as a transition
+temp <- with(pdata, ifelse(death, 4,
+                           ifelse(as.numeric(bili3)==b3, 0, b3)))
+pdata$bstate <- factor(temp, 0:4, c("none", "normal", "1-4", ">4", "death"))
+pdata$age1 <- with(pdata, age + day1/365.25)
+pdata$age2 <- with(pdata, age + day2/365.25)
+pdata$year1 <- pdata$day1/365.25
+pdata$year2 <- pdata$day2/365.25
+pdata$ibili3 <- pdata$bili3[match(pdata$id, pdata$id)]
+check <- survcheck(Surv(year1, year2, bstate) ~ 1, pdata, id=id, istate=bili3)
+check
+
+count <- table(pdata$id)
+round(mean(count>3),2)
+table(count)
+```
+
+To set up the simulation, I will use only those with 4 or more obs as my
+prototypes. One interesting issue seen in the above follow-up plot is an
+apparent enrollment effect: about half of the bilirubins decline from first to 
+second visit. We've listed the largest below.
+Interestingly, on log(bili) scale the biggest drop is id 228, from .7 to .1,
+something we would not consider consequential.  We also drop id 200.
+
+```{r, decline}
+p4 <- subset(pdata, (id %in% names(count)[count>3]))
+delta1 <- with(p4, tapply(bili, id, function(x) diff(x[1:2])))
+mean(delta1 < 0)
+hist(delta1, nclass=30, main=NULL, xlab="Bili, change at first fu")
+subset(p4, id %in% names(delta1[delta1< -10]), c(id, year1, bili))
+```
+
+For the simulation, I do not allow for a drop in the true bilirubin.
+That is, consider a biliogy where the true underlying disease process
+starts flat and then turns upward, and so does th "true" bilirubin that
+is driving that process. 
+As our set of prototypes, 
+fit a hyperbola to log(bili), for everyone with 4 or more values. The
+equation is $y= a + b[(x-c) + \sqrt{(x-c)^2 + .5}]$;
+$a$ is the starting "flat", $b$ the right hand slope and $c$ the
+inflection point.
+We are essentially using a broken line with a horizontal left hand portion;
+the hyperbola formula has first and second derivatives so optimizer 
+routines are happier.
+The .5 causes the curve to take about 1-2 years to fully turn the corner. 
+For a subject with no flat portion, they were already rising at enrollment,
+the optimum has an inflection at -infinity; this 
+completely removes the bend.
+But that solution also drives the intercept down to an odd value.
+The function is essentially flat at -5, so force that as a minimum allowed
+value for the inflection point, i.e., 5 years before enrollment.
+This constraint won't change the RSS much at all, but makes the results look
+a bit more sane.
+
+```{r, hyperbola}
+hfun <- function(par, x, y, ss=TRUE, positive=TRUE) {
+    inflect <- pmax(par[3], -5)
+    if (positive) par[2] <- pmax(0, par[2])
+    yhat <- par[1] + par[2]*((x-inflect) + sqrt((x-inflect)^2 + .5))
+    if (!ss) yhat
+    else sum((y-yhat)^2)
+}
+id4 <- unique(p4$id)
+hfit <- matrix(0, length(id4), 6)
+for (i in 1:length(id4)) {
+    j <- (p4$id== id4[i])
+    lfit <- lm(log(bili) ~ year1, p4, subset=j)
+#    tfit <- optim(c(coef(lfit), .1), hfun, method="BFGS",  # one subject fails
+    tfit <- optim(c(coef(lfit), .1), hfun, method="Nelder-Mead",
+                  x= p4$year1[j], y=log(p4$bili[j]))
+    hfit[i,] <- c(tfit$par, coef(lfit), sqrt(tfit$val/sum(j)))
+}
+hfit[,2] <- pmax(0, hfit[,2])  # the "positive" attribute above
+
+toss <- (abs(hfit[,2]) > 1.5)  # this is rather arbitrary, to cut off id 200
+toss <- (toss | hfit[,5] < -.25) # linear fit is strong negative
+colnames(hfit) <- c("intercept", "slope", "inflect", "lm int", "lm slope", "std")
+rownames(hfit) <- id4
+hfit[toss,]
+pairs(hfit[!toss,])
+
+showfit <- function(id){
+    i <- match(id, id4)
+    tdat <- subset(p4, id==id4[i])
+    xx <- seq(-1, max(tdat$year1), length=50)
+    yhat <- exp(hfun(hfit[i, 1:3], xx, ss=FALSE))
+    plot(bili ~ year1, tdat, log='y', ylim=range(p4$bili))
+    lines(xx, yhat, col=2)
+    lines(xx, exp(hfit[i,4] + xx*hfit[i,5]), col=3, lty=2)
+    text(1, 40, id4[i])
+}
+opar <- par(mfrow=c(2,2))
+for (i in which(toss)) showfit(id4[i])
+par(opar)
+```
+
+The above shows thes one who will not be used for the simulation.
+About `r round(mean(hfit[,3] <=0),2)` of the fits have an estimated inflection to
+the left of 0. 
+
+```{r, basedata}
+temp <- subset(p4, !duplicated(id))
+base <-data.frame(id=id4,hfit[,1:3], age= temp$age, bili3=temp$bili3)[!toss,]
+# the baseline for the simulant doesn't exactly match temp
+zz <- double(nrow(base))
+for (i in 1:nrow(base)) {
+    zz[i] <- exp(hfun(unlist(base[i,2:4]), x=0, ss=FALSE))
+}
+base$bili3 <- cut(zz, c(0, 1, 4, 100), levels(temp$bili3))
+```
+
+The overall hazard of death and censoring distribution are below.
+
+```{r, death}
+p1 <- subset(pbcseq, !duplicated(id))
+dfit <- survfit(Surv(futime/365.25, status==2) ~ 1, p1)
+cfit <- survfit(Surv(futime/365.25, status <2)~ 1, p1)
+plot(dfit, cumhaz=TRUE,
+     xlab="Years from enrollment", ylab="Cumulative hazard")
+abline(0, .07, col=2)
+
+plot(cfit, fun="event", ylab="P(censored)", xlab="Years")
+lines(c(4,14), c(0,1), col=2)
+```
+
+The death hazard is close to 7%/year, and censoring of U(4,14).
+
+To create a simulation data set we sample with replacement from the
+set of `r nrow(base)` starting age + bilirubin trajectory sets. 
+This pseudo subject is sampled at intervals, with noise added to the
+observed bilirubin commesurate with the earlier fits.
+The true HR is based on enrollment age, true bilirubin, and chosen coefficients;
+a scale factor turns this into absolute risk based on actual (time dependent)
+age. This results in a random survival time + random censoring pair, which
+truncates the followup for that observation.
+
+To next section is almost an aside. I had thought to use Minnesota
+survival times a scalar as the baseline absolute risk, but that wasn't
+really a good idea (efit, efit2).  Then finally got the right idea in
+efit3.
+
+```{r, relhaz}
+expected <- survexp(futime ~ 1, data=pdat0, method="individual.h",
+                    ratetable=survexp.mn,
+                    rmap=list(sex="female", year=as.Date("1976-01-01"),
+                              age = round(age*365.25)))
+efit <- glm(I(status==2) ~ age + log(expected), poisson, data=pdat0)
+coef(efit)
+
+efit2 <- glm(I(status==2)~ offset(log(expected)), poisson, data=pdat0)
+coef(efit2)
+
+tage <- tcut(pdat0$age*365.25, 1:90 *365.25) # per year of age
+expdata <- pyears(Surv(futime, status==2) ~ tage+ bili3, data=pdat0,
+                  ratetable=survexp.mn, data.frame=TRUE,
+                  rmap=list(sex="female", year=as.Date("1976-01-01"),
+                            age = round(age*365.25)))$data
+expdata$age <- as.numeric(expdata$tage) # age divided in years
+efit3 <- glm(event ~ age + bili3 + offset(log(pyears)), poisson, data=expdata)
+coef(efit3)
+    
+```
+
+Why the negative coefficient for expected in efit --- do death rates decrease?
+This is an example of immortal time bias, and a mistake I have made before.
+The issue is that early death guarrantees a small expected (a death on day 2
+accumulates no time), thus a small expected ``predicts'' early death.
+Using it as a fixed offset is fine, and shows that the overall death rate for
+PBC subjects is about 9x Minn expected.
+
+The efit3 fit ignores the expected and is a valid way to proceed. A second idea
+is to use coxph along with the cumulative hazard.  In the same way that
+$F(X) ~ U(0,1)$ when $X$ is a random draw from a distrbution with cumulative
+distribution function $F$, a random draw from the cumulative hazard has an
+exponentia(1) distribution. So we could use approx() + random exp draw + 
+the empriical cumhaz to get times. 
+But the coefs of efit3 and pfit are very similar,
+and the coxph cumhaz is reasonably linear, so it is easier to use the efit3
+formula directly. We are trying for a death rates in the same ballpark, not
+an exact match.
+
+```{r}
+pfit <- coxph(Surv(year1, year2, death) ~ age + bili3, pdata)
+psurv <- survfit(pfit, newdata=data.frame(age=30, bili3="normal"),
+                 start.time=0)
+plot(psurv, cumhaz=TRUE, conf.int=FALSE, xlab="Age", ylab="Cumulative hazard")
+```
+
+The simulatation will use continuous bilirubin.
+In order to facilitate different bilirubin coefficients, we use centered
+bilirubin, that way if we change the coef the overall death rate doesn't
+move so much.
+Since the real survival will be based on time dependent bilirubin the hazard
+for any given prototype subject won't be linear; we track it at monthly 
+discrete times. A monthly step function will be good enough.
+All the simulations will be censored at 14 years, so 0-14 yrs post enrollment.
+
+```{r, realsurv}
+meanbili <- mean(log(pdata$bili))
+xtime <- seq(0, 14, length= 1+ 14*12) 
+realsurv <- function(beta, ecoef=coef(efit3)[1:2], debug=FALSE) {
+    n <- nrow(base) # number of bilirubin patterns
+    hazard <- matrix(0, length(xtime), n)
+    for (i in 1:n) {
+        lbili <- hfun(unlist(base[i,2:4]), x=xtime, ss=FALSE)
+        lbili <- pmin(lbili, log(40))  # .1- 41 is the range in pbcseq
+        # log of baseline haz at the start of each month
+        bhaz <- ecoef[1] + ecoef[2]*(base$age[i]+ xtime)
+        hazard[,i] <- exp(bhaz + (lbili-meanbili)*beta)
+    }
+
+    # we want the cumhaz to start at 0
+    chaz <- apply(hazard, 2, function(x)
+        c(0, cumsum(x[-length(x)]))) * (1/12)  # width of interval
+    if (debug) browser()
+    exp(-chaz)
+}
+
+surv1 <- realsurv(1.3)  #   1.3 = approx coef of TD cox fit using log(bili)
+```
+
+The above matrix has one column for each of the `r nrow(base)` canonical
+initial age + bilirubin over time subjects. This is the true survival fo
+
+```{r, margin}
+# Compare the margin to the observed KM
+temp <- model.matrix(~base$bili3 -1)
+margin <- surv1 %*% (temp %*% diag(1/colSums(temp)))
+km0 <- survfit(Surv(year1, year2, death) ~ ibili3, pdata, id=id)
+plot(km0, fun="event", ylab="Survival")
+matlines(xtime, 1-margin, col=2, lwd=2, lty=1)
+```
+
+That plot doesn't look half bad. The marginal rates from our time
+dependent bilirubin look much like a KM of initial bilrubin.
+I do worry a bit that the $>4$ group only has 35 canonical cases.
+
+# Simulation
+
+Create simulated data sets where each observation is a random draw from
+the population of true (starting age, bilirubin over time) sets, for each
+generate a survival and censoring time, and a set of visit dates.
+Visit times are based on observed visit intervals. 
+The protocol for the study specified a visit at 6 months and yearly
+thereafter, below I sample from the observed "time to first" and "time
+between others" intervals, but capping the interval lengths.
+
+```{r, obsvisit}
+interval1 <- with(pbcseq, unlist(tapply(day, id, function(x) {
+    if (length(x) <2) NULL else x[2]-x[1]})))
+interval2 <- with(pbcseq, unlist(tapply(day, id, function(x) {
+    if (length(x) <3) NULL else (diff(x))[-1]})))
+
+# limit the max
+interval1 <- unname(interval1[interval1 < 400])
+interval2 <- unname(interval2[interval2 < 1000])
+
+sim1 <- function(k, survmat, id=k, debug=FALSE) {
+    # simulate a single subject from prototype k
+    visits <- cumsum(c(0, sample(interval1, 1), 
+                     sample(interval2, 15, replace=TRUE)))/365.25
+    ctime <- runif(1, 4, 14)
+    # approx will complain in survmat[,k] ends in a string of zeros
+    nz <- sum(survmat[,k] >0)
+    if (nz < length(xtime)) {
+        j <- seq.int(1, nz+ 1L)             
+        stime <- approx(survmat[j,k], xtime[j], runif(1))$y
+    }
+    else stime <- approx(c(survmat[,k],0), c(xtime,15),  runif(1))$y
+    dtime <- min(ctime, stime)
+    death <- 1*(stime <= ctime)
+    visit2 <- visits[(dtime > visits)]
+    if (any(is.na(visit2)) || is.na(dtime) || length(visit2)==0) browser()
+                     
+    lbili <- hfun(unlist(base[k, 2:4]), x=visit2, ss=FALSE)  # true bilirubin
+    bili  <- exp(lbili) * runif(1, .9, 1.1)        # observed bilirubin
+    bili <- pmin(bili, 41) # no outliers   
+    nrow <- length(visit2)
+    bili3 <- cut(bili, c(0, 1, 4, 100), c("normal", "1-4", ">4"))
+    # 4 level state
+    temp <- ifelse(bili3[-nrow]== bili3[-1], 0, as.numeric(bili3[-1]))
+    bstate <- factor(c(temp, 4*death), 0:4, 
+                     c("none", "normal", "1-4", ">4", "death"))
+    if (debug) browser()
+    #create a counting process data set for this subject
+    data.frame(id=rep(id, nrow), age= base$age[k],
+               year1 = visit2, year2=c(visit2[-1], dtime),
+               bili = bili,
+               bili3 = bili3,
+               ibili3 = rep(bili3[1], nrow),
+               death = c(rep(0, nrow-1), death),
+               bstate= bstate)
+}
+
+set.seed(1953)
+jj <- sample(1:nrow(base), 4000, replace=TRUE)
+temp <- lapply(seq(along=jj), function(i) sim1(jj[i], surv1, id=i))    
+sdata1 <- do.call(rbind, temp)
+scheck <- survcheck(Surv(year1, year2, bstate) ~1, sdata1, id=id,
+                    istate=bili3)
+
+km <-  survfit(Surv(year1, year2, death) ~ ibili3, id=id, sdata1)
+aj1 <- survfit(Surv(year1, year2, bstate) ~ 1, id=id, sdata1,
+                p0=c(1,0,0,0), istate=bili3)
+aj2 <- survfit(Surv(year1, year2, bstate) ~ 1, id=id, sdata1,
+                p0=c(0,1,0,0), istate=bili3)
+aj3 <- survfit(Surv(year1, year2, bstate) ~ 1, id=id, sdata1,
+                p0=c(0,0,1,0), istate=bili3)
+plot(km, fun='event', col=1:3, lty=2)
+lines(aj1[4], lty=3, col=1, conf.int=FALSE)
+lines(aj2[4], lty=3, col=2, conf.int=FALSE)
+lines(aj3[4], lty=3, col=3, conf.int=FALSE)
+
+matlines(xtime, 1-margin, lwd=2, col=1:3, lty=1)
+legend("topleft", c("true marginal", "KM", "multistate AJ"),
+       lty=1:3, col=1, bty='n')
+```
+
+To summarize: each simulated subject is randomly drawn from a (starting age,
+bilirubin progression) pattern, there are `r nrow(base)` unique patterns to
+draw from. For simplicity, each bilirubin pattern is treated as a step function
+with $14*12 = 168$ steps over the maximum 14 year followup.
+The true survival for each of the patterns follows a proportional hazards model
+with
+$$
+\lambda_i(t) = \exp(-6.09 + .044*age + 1.3*(log(bili)-.58))
+$$
+
+We saw further above that the marginal estimates, which are the mean survival
+curves for those with initial bilirubin in the $\le 1$, 1--4 and $>4$ groups,
+look very similar to the KM for those three groups in the `pbcseq` data. 
+That serves to show that our simulation world has some broad similarity to the 
+sequenial PBC data, but detailed mimicry is neither necessary nor something we
+strived for. 
+
+The curves above compare the KM and multi-state AJ curves to the true margin
+for a single random draw of 4000 subjects. It's primary purpose is to check for
+any gross errors in our data generation process. 
+
+
+# Simulation
+For the actual simulation we would like to estimate quantiles (5, 25, 50, 75,
+95) for the KM, multistate AJ, and multistate coxph approach. 
+We will do this for a sample size of 312, matching the original study.
+To have reasonable precision in the outer percentiles we will do 1000
+simulations, and retain results at the monthly time points.
+
+```{r, dosim}
+nsim <- 1000
+if (file.exists("simdata.rda")) { 
+    load("simdata.rda") #simdata1, simdata2
+} else {
+    # Create the simulation data sets
+    set.seed(1960)
+    surv1 <- realsurv(1.3)
+    surv2 <- realsurv(.6)
+    temp <- model.matrix(~base$bili3 -1)
+    margin1 <- surv1 %*% (temp %*% diag(1/colSums(temp)))
+    margin2 <- surv2 %*% (temp %*% diag(1/colSums(temp)))
+    
+    simdata1 <- lapply(1:nsim, function(k) {
+        jj <- sample(1:nrow(base), 312, replace=TRUE)
+        tdata <-lapply(seq(along=jj), function(i) sim1(jj[i], surv1, id=i))
+        do.call(rbind, tdata)
+        })
+
+    simdata2 <- lapply(1:nsim, function(k) {
+        jj <- sample(1:nrow(base), 312, replace=TRUE)
+        tdata <-lapply(seq(along=jj), function(i) sim1(jj[i], surv2, id=i))
+        do.call(rbind, tdata)
+        })
+    save(xtime, simdata1, simdata2, surv1, surv2, base, file="simdata.rda")
+}
+
+if (file.exists("curve1.rds")) {
+    curve1 <- readRDS("curve1.rds")
+} else {
+    curve1 <- array(0, dim=c(nsim, length(xtime), 3, 3),
+                dimnames=list(NULL, NULL, levels(base$bili3),
+                              c("KM", "AJ", "Cox")))
+    for (i in seq(along=simdata1)) {
+        tdata <- simdata1[[i]]
+        km <- survfit(Surv(year1, year2, death) ~ ibili3, id=id, tdata)
+        temp <- matrix(1- summary(km, times=xtime, extend=TRUE)$surv, ncol=3)
+        curve1[i,,,1] <- temp
+
+        aj1<- survfit(Surv(year1, year2, bstate) ~ 1, tdata, id=id,
+                      p0=c(1,0,0,0), istate=bili3)
+        temp <- summary(aj1, times=xtime, extend=TRUE) 
+        curve1[i,,1,2] <- temp$pstate[,4]
+
+        aj2 <- survfit(Surv(year1, year2, bstate) ~1, tdata, id=id,
+                       p0=c(0,1,0,0), istate=bili3)
+        curve1[i,,2,2] <- summary(aj2, times=xtime, extend=TRUE)$pstate[,4]
+
+        aj3 <- survfit(Surv(year1, year2, bstate) ~1, tdata, id=id,
+                       p0=c(0,0,1,0), istate=bili3)
+        curve1[i,,3,2] <- summary(aj3, times=xtime, extend=TRUE)$pstate[,4]
+
+        coxfit <- coxph(list(Surv(year1, year2, bstate) ~ 1,
+                         0:4 ~ age/common+ shared), tdata, id=id,
+                        istate=bili3)
+
+        dummy <- data.frame(age=base$age)
+        csurv1 <- survfit(coxfit, newdata=dummy, p0=c(1,0,0,0))
+        temp <- summary(csurv1, times=xtime, extend=TRUE)$pstate[,,4]
+        curve1[i,,1,3] <- rowMeans(temp)
+
+        csurv2 <- survfit(coxfit, newdata=dummy, p0=c(0,1,0,0))
+        temp <- summary(csurv2, times=xtime, extend=TRUE)$pstate[,,4]
+        curve1[i,,2,3] <- rowMeans(temp)
+
+        csurv3 <- survfit(coxfit, newdata=dummy, p0=c(0,0,1,0))
+        temp <- summary(csurv3, times=xtime, extend=TRUE)$pstate[,,4]
+        curve1[i,,3,3] <- rowMeans(temp)
+        cat(" ",i)
+    }
+    saveRDS(curve1, file="curve1.rds")
+}
+
+if (file.exists("curve2.rds")) {
+    curves <- readRDS("curve2.rds")
+} else {
+    curve2 <- array(0, dim=c(nsim, length(xtime), 3, 3),
+                dimnames=list(NULL, NULL, levels(base$bili3),
+                              c("KM", "AJ", "Cox")))
+    for (i in seq(along=simdata2)) {
+        tdata <- simdata2[[i]]
+        km <- survfit(Surv(year1, year2, death) ~ ibili3, id=id, tdata)
+        temp <- matrix(1- summary(km, times=xtime, extend=TRUE)$surv, ncol=3)
+        curve2[i,,,1] <- temp
+
+        aj1<- survfit(Surv(year1, year2, bstate) ~ 1, tdata, id=id,
+                      p0=c(1,0,0,0), istate=bili3)
+        temp <- summary(aj1, times=xtime, extend=TRUE) 
+        curve2[i,,1,2] <- temp$pstate[,4]
+
+        aj2 <- survfit(Surv(year1, year2, bstate) ~1, tdata, id=id,
+                       p0=c(0,1,0,0), istate=bili3)
+        curve2[i,,2,2] <- summary(aj2, times=xtime, extend=TRUE)$pstate[,4]
+
+        aj3 <- survfit(Surv(year1, year2, bstate) ~1, tdata, id=id,
+                       p0=c(0,0,1,0), istate=bili3)
+        curve2[i,,3,2] <- summary(aj3, times=xtime, extend=TRUE)$pstate[,4]
+
+        coxfit <- coxph(list(Surv(year1, year2, bstate) ~ 1,
+                         0:4 ~ age/common+ shared), tdata, id=id,
+                        istate=bili3)
+
+        dummy <- data.frame(age=base$age)
+        csurv1 <- survfit(coxfit, newdata=dummy, p0=c(1,0,0,0))
+        temp <- summary(csurv1, times=xtime, extend=TRUE)$pstate[,,4]
+        curve2[i,,1,3] <- rowMeans(temp)
+
+        csurv2 <- survfit(coxfit, newdata=dummy, p0=c(0,1,0,0))
+        temp <- summary(csurv2, times=xtime, extend=TRUE)$pstate[,,4]
+        curve2[i,,2,3] <- rowMeans(temp)
+
+        csurv3 <- survfit(coxfit, newdata=dummy, p0=c(0,0,1,0))
+        temp <- summary(csurv3, times=xtime, extend=TRUE)$pstate[,,4]
+        curve2[i,,3,3] <- rowMeans(temp)
+        cat(" ",i)
+    }
+    saveRDS(curve2, file="curve2.rds")
+}
+```
+
+Plot the results of the simulation.
+
+```{r, quant}
+qcurve1 <- apply(curve1, 2:4, function(x) quantile(x, c(.05, .1, .25, .5, .75,
+                                                      .9, .95)))
+matplot(xtime, matrix(qcurve1[4,,,], ncol=9), type='l', lwd=2,
+        col=rep(1:3, each=3), lty=1,
+        xlab="Years from entry", ylab="Death")
+
+legend("topleft", c("KM", "AJ", "Cox", "True"), col=1:4, 
+       lty=c(1,1,1,3), lwd=2, bty='n')
+
+temp <- model.matrix(~base$bili3 -1)
+margin1 <- surv1 %*% (temp %*% diag(1/colSums(temp)))
+margin2 <- surv2 %*% (temp %*% diag(1/colSums(temp)))
+matlines(xtime, 1-margin1, lwd=2, col=4, lty=3)
+
+citime <- c(4, 8, 12)
+eps <- .1
+ii <- match(citime, xtime) # row index
+ciq <- qcurve1[c(1,7),ii,,]
+xx <- outer(citime, c(-eps, 0, eps), '+')
+for (i in 1:3) {
+    segments(xx[,i], ciq[1,,,i], xx[,i], ciq[2,,,i], col=i, lwd=2)
+}
+```
+
+In the above plot black= KM based on baseline bilirubin, red= time-dependent
+AJ using 4 states, green = Cox model with 4 states and age as a covariate,
+marginal over the ages. Gray = the true marginal model, i.e., the mean of
+the true curves for the `r nrow(base)` subjects in our population. 
+Solid, dashed and dotted are the 3 "initial bilirubin" groups. 
+The vertical bars connect the empirical 5 and 95 percentiles, so correspond to a
+90% confidence interval. 
+
+This plot can almost certainly be improved. Maybe as a 3 panel version?
+
+How is the bias when the bilirubin effect is smaller?
+
+```{r, quant2}
+qcurve2 <- apply(curve2, 2:4, function(x) quantile(x, c(.05, .1, .25, .5, .75,
+                                                      .9, .95)))
+matplot(xtime, matrix(qcurve2[4,,,], ncol=9), type='l', lwd=2,
+        col=rep(1:3, each=3), lty=1,
+        xlab="Years from entry", ylab="Death")
+
+legend("topleft", c("KM", "AJ", "Cox", "True"), col=1:4, 
+       lty=c(1,1,1,3), lwd=2, bty='n')
+
+matlines(xtime, 1-margin2, lwd=2, col=4, lty=3)
+
+citime <- c(4, 8, 12)
+eps <- .1
+ii <- match(citime, xtime) # row index
+ciq <- qcurve2[c(2,6),ii,,]
+xx <- outer(citime, c(-eps, 0, eps), '+')
+for (i in 1:3) {
+    segments(xx[,i], ciq[1,,,i], xx[,i], ciq[2,,,i], col=i, lwd=2)
+}
+```
+
+Because of graphical overlap, the above has the (.1, .9) bars rather than 
+(.05, .95).  This can certainly be fixed.

@@ -6,7 +6,7 @@
 \newcommand{\code}[1]{\texttt{#1}}
 \title{Time-dependent covariates and survival curves}
 \author{Terry Therneau}
-\date{April 2025}
+\date{May 2026}
 
 \begin{document}
 <<echo=FALSE>>=
@@ -85,21 +85,23 @@ statefig(1:2, smat)
     \item Cohort of 85 subjects, what is their expected 10 year survival?
     \item Sex, age in days, enrollment date, $p_i(0) =1$
       \begin{enumerate}
-        \item look up 85 daily hazards in US rate tables
-        \item $h(t) = \sum_{i=1}^{85}  p_i(t)h_i(t)/ \sum p_i(t)$
-        \item $p_i(t)= p_i(t) exp(-h_i(t))$
-        \item move ahead one day
+        \item look up 85 daily hazards in US rate tables: 
+          $\lambda_i(a_{ij},  s_i, y_{ij})$
+        \item increment $a$ and $y$ by one day
+        \item   $\lambda_i(a_{ij},  s_i, y_{ij})$
+          \item \ldots
+        \item $\Lambda_i(t) = \sum_{s \le t} \lambda_i(s)$
       \end{enumerate}
-    \item $S = e^{h_1} e^{h_2} \ldots$
+    \item $S_i = e^{-\Lambda_i(t)}$
   \end{itemize}
 \end{frame}
 
 \begin{frame}{MCSA}
   \begin{itemize}
-  \item Use modified MSH to create a 3 column rate table by age, sex, APOE, 
-    amyloid, CMC (ND:dem, ND:death, dem:death)
-  \item AJ estimates of future CMC/death, given start at 0, start at 1, \ldots
-  \item AJ estimates of future amyloid/death, given start low, start mod, 
+  \item Use the MSH fit to create rate tables for ND:dem, ND:death, dem:death
+  \item Person-years estimates of future CMC/death, given start at 0, 
+    start at 1, \ldots
+  \item PY estimates of future amyloid/death, given start low, start mod, 
     start high
   \item starting point $\pi_i$ of state * CMC * amyloid
    \begin{enumerate}

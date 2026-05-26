@@ -53,7 +53,7 @@ dx2 <- factor(c(1,2,2,3,2,3,4)[as.numeric(dementia$dx)], 1:4,
 table2(dementia$dx, dx2)
 
 if (packageVersion("survival") >= "3.8-7") {
-    survcheck(Surv(age, dx2) ~1, dementia, id= ptnum)$transitions
+    print(survcheck(Surv(age, dx2) ~1, dementia, id= ptnum)$transitions)
 
     # create the simpler endpoint of not demented (ND), ever dementia, death
     temp <- unlist(tapply(as.numeric(dx2), dementia$ptnum, function(z)
@@ -140,22 +140,23 @@ Now create the plots.  First create labels for the columns
 <<hazardplot>>=
 p1 <- outer(c("F", "M"), c( "-low", "+low", "-mod", "+mod", "-high", "+high", 
                "-miss", "+miss"), paste0)
-p1 <- c(t(p1), "+2 CMC", "edu4")
+p1 <- c( "+2 CMC", "edu4", t(p1))
 jj <- grepl("cmc", rownames(yy2))
 yy2[jj,] <- yy2[jj,] *2
 
 opar <- par(mar=c(5,6,1,1))
 
-z1 <- exp(rbind(yy1[c(1:6, 9:14),], yy2[1:2,]))
+z1 <- exp(rbind( yy2[1:2,], yy1[c(1:6, 9:14),]))
 matplot(z1, 1:14, type='n', log='x', xlab="Hazard Ratio", ylab="",
         yaxt='n')
-pp1 <- p1[c(1:6, 9:14, 17:18)]
+pp1 <- p1[c(1:8, 11:16)]
 axis(side=2, 1:14, pp1, las=2, cex.axis=1)
 
-points(z1[,1], 1:14, pch=19)
-segments(z1[,2], 1:14, z1[,3],1:14)
+icol <- rep(c("black", "blue", "darkblue"), c(2,6,6))
+points(z1[,1], 1:14, pch=19, col=icol)
+segments(z1[,2], 1:14, z1[,3],1:14, col=icol)
 abline(v=1, lty=2)
-abline(h=c(6.5, 12.4), lty=3)
+abline(h=c(2.5, 8.5), lty=3)
 par(opar)
 @ 
 
@@ -271,6 +272,21 @@ Only later did we realize that this entire bookkeeping process mimics a
 multistate Aalen-Johansen estimate, and could be approach from that direction.
 
 Yet to be done: compute the predicted curves using this method.
+
+
+Big questions:
+\begin{itemize}
+  \item One example + one simulation $\ne$ proof
+  \item Why 3 bilirubin groups?  Why not 6, 10, 100?
+  \item What about multiple TD covariates?
+  \item How does this compare to joint models?
+    \begin{itemize}
+      \item joint model is true
+      \item frailty assumption false
+      \item linearity assumption false
+    \end{itemize}
+  \item Interval censored models?
+\end{itemize}
 
 \end{document}
 
