@@ -1,0 +1,144 @@
+\documentclass{article}[12pt]
+\usepackage{amsmath}
+\title{Some open questions}
+\author{Terry Therneau}
+
+\addtolength{\textwidth}{1in}
+\addtolength{\oddsidemargin}{-.5in}
+\setlength{\evensidemargin}{\oddsidemargin}
+
+\newcommand{\code}[1]{\texttt{#1}}
+
+\begin{document}
+\maketitle
+
+\section{Fatty liver disease}
+In the analysis of the fatty liver disease data (NAFLD) had  the
+following biological model.
+
+<<model, echo=FALSE>>=
+nmat <- matrix(0, 5, 5, dimnames=list(nstate, nstate))
+nmat[1,2] <- nmat[2,3] <- nmat[3,4] <- 1
+nmat[1:4,5] <- 1
+nmat[1, 3:4] <- nmat[2,4] <- .7
+statefig(rbind(4,1), nmat, alty=c(1,2,1,2,2,1,1,1,1,1))
+@ 
+
+For the analyis I had used a multi-state hazard (MSH) model that was
+event based.  That is, it used coxph, and the underlying data were the
+times of transitions plus baseline covariates (sex, NAFLD, BMI, \ldots).
+But the analysis raises some questions. 
+
+A primary one is that the study is based on medical history data, where visits
+are a random process (random in the sense that we don't know when or why
+a particular subject will return).
+Using the availabily of an HDL value as a surrogate for a visit that 
+``would have recorded'' the 3 metabolic comorbidities if they were present,
+the code below shows the distribution of inter-visit times.
+
+<<intervisit>>=
+hdldat <- unique(subset(nafld2, test=="hdl"))
+temp <- with(hdldat, tapply(days, id, diff))
+delta <- unlist(temp)
+quantile(delta)
+hist(delta[delta>7]/365.25, nclass=30, main=NULL, xlab="Time between visits")
+@ 
+
+Question 1: Clearly the true date of an incident MC is on or before the
+detected date, perhaps by several years.  What is the impact of this on
+estimated coefficients?  What is the impact on the estimated absolute risk?
+
+Question 2: Some subjects who were recruited as controls were later diagnosed
+with NAFLD.  What is the impact of different ways of dealing with this?
+\begin{itemize}
+  \item Ignore the change, and only use the initial cases and control
+  \item Treat NAFLD as a time-dependent covariate
+  \item Treat NAFLD as a state; we would now have 2*4 + death = 9 states
+\end{itemize}
+
+Question 3 (harder): It is known from NHANES and other studies 
+that the population prevalence of fatty liver is 20--30\%.  The NAFLD
+study identied 3851 cases in a 7 year window, in an Olmsted County popultion
+of roughly 100 thousand = 3.8\%. This means that a portion of
+our 'controls' have undetected NAFLD.  What is the impact of this?
+
+\section{Mayo Clinic Study of Aging}
+
+In the 2022 paper we looked at the impact of amyloid on the incidence 
+of dementia (hazard ratios), current status ($p(t)$), lifetime risk of
+ever having dementia,  and expected total years in the dementia state.
+The data set used study visits, off study record review, and last
+follow-up status information.
+As a reminder, the study protocol specifies a study visit every 15 months.
+It is not common but also not rare for a patient to skip a study visit
+sometime in their tenure, what is common is for someone to leave the study
+without announcing their intention to do so.
+If a subject has not been seen in 36 months, their identifier is put on
+the review list.  Study nurses then retrieve the medical history and review
+it for dementia, which can be diagnosed via a standard MD visit; but MCI
+can not be distinguished. A status of death or last alive comes from automated
+systems which are based on much broader data sources.
+
+Question 4: The fact that there were 395 on study dementias and 430 off study
+dementias is prima facia evidence of differential dropout (and it is true).
+What is the impact of ignoring the off study data? (Many large studies in
+this field do not have access to such data.)  Hypothesis: it has a
+bigger effect on absolute risk than on the hazard ratio.
+
+Question 5: Only about 40\% of the subjects participate in imaging (.37 in
+the public data set); the biggest reason for non-participation appears to
+be time -- imaging requires a second appointment which normally takes 
+2 full days.
+In the 2022 paper we categorized amyloid as low/moderate/high/missing and used
+all subjects, under the assumption that we would have better precision for the
+male, e4, and cmc effects.  
+\begin{itemize}
+   \item Is that true?
+   \item What is the impact on the absolute rates, of using only the amyloid
+   subjects?  
+\end{itemize}
+
+Question 6: In a reprise of question 1, what is the impact of interval censored
+visit times?  On study visits are supposed to be every 15 months, a schedule
+which patient adhere to imperfectly.  History review occurs at 3 year
+intervals.
+
+Note: There is significant non-proportional hazards for the female 
+     APOEe4 effect, which we ignored.  
+What is a better estimate of that effect, and what is
+it's impact on the absolute rates?  A preliminary look implied that the impact
+of this non-PH is quite disparate.
+
+\section{Crohn's disease}
+Many of the above questions apply to the data set on Crohn's disease, which had
+a rather ad hoc analysis for the study paper (I was new to MSH models).
+What does a proper analysis look like, and what can we learn?
+
+\section{PBC}
+The sequential PBC data set was used as a platform to explore the idea of
+replacing a time dependent covariate with a set of states in a MSH model.
+The first look showed that the idea might have merit, but more depth is 
+ needed.  Such a look does not necessarily need to use the PBC data set.
+Cortese and Andersen (2009) looked at time-dependent categoricals.
+
+Question 7: We divided bilirubin into 3 groups of normal ($\le 1$), 1--4 and
+4+.  What is the proper number of groups, and how could one pick cutpoints?
+
+Question 8: What if there are multiple TD covariates. Consider bilirubin and
+albmumin in the PBC data, for instance.  One could divide each into 3 groups
+to get 3*3 + death = 10 states.  How many groups, and many covariates can we 
+handle?
+
+Question 9: The book chapter 14 implies that a MSH model (coxph) can handle more
+groups than an AJ, but imposing proportional hazard functions.  True?
+
+Question 10: An alternate way to deal with time dependent covariates is the
+joint modeling framework.  How does this approach compare?
+
+\section{Interval censored MSH models}
+Interval censored hazard models seem to have promise as a way to address many
+of the questions above.  A contrast of event based MSH (coxph) or 
+interval censored MSH (mshmm)
+can be explored for any of them.
+
+\end{document}
