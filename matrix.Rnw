@@ -1,0 +1,253 @@
+\documentclass{article}[11pt]
+\usepackage{amsmath}
+\usepackage{amssymb}
+\addtolength{\textwidth}{1in}
+\addtolength{\oddsidemargin}{-.5in}
+\setlength{\evensidemargin}{\oddsidemargin}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\lhat}{\hat\lambda}
+\newcommand{\Lhat}{\hat\Lambda}
+\newcommand{\Shat}{\hat S}
+
+\title{Math interlude}
+\author{Terry Therneau}
+\date{9 June 2026}
+\begin{document}
+\maketitle
+
+\section{Matrix exponential}
+For the simple exponential
+\begin{align*}
+  e^x &= 1 + x + \frac{x^2}{2!} + \frac{x^3}{3!} + \ldots \\
+      &=  \lim_{n\rightarrow\infty} (1 +x/n)^n \\
+  e^xe^y &= e^{x+y} \\
+  \frac{\partial e^x}{\partial x} &= e^x
+\end{align*}
+
+For a matrix $A$
+\begin{align*}
+  e^A & = I + A + \frac{A^2}{2!} + \frac{A^3}{3!} + \ldots \\
+      & = \lim_{n\rightarrow\infty} (I + A/n)^n \\
+  e^Ae^B & \ne e^{A+B} \\
+  \frac{\partial e^A}{\partial A_{ij}} &= ?
+\end{align*}
+
+The matrix exponential is a lot more difficult to compute;
+matrices where the elements of $A$ are quite different is size
+are challenging. For a 9 state model the code below shows that 
+the matrix exponential computation takes on the order of 30 times
+an ordinary exponential.
+
+<<timing>>=
+A <- matrix(1:81, 9, byrow=TRUE)/200
+diag(A) <- diag(A)- rowSums(A)  # make the rows sum to 0
+system.time({for (i in (1:1e5)) exp(A)})
+system.time({for (i in (1:1e5)) expm(A)})
+@ 
+
+Relation to survival
+\begin{center}
+  \begin{tabular}{cl}
+    $N_i(t)$ & cumulative number of events for subject $i$, up to time $t$ \\
+    $N_{ijk}(t)$ & in a multistate model, the number of transitions from state
+           $j$ to state $k$ for subject $i$ \\
+    $Y_i(t)$ & 0/1 indicator that subject $i$ is at risk at time $t$ \\
+    $Y_{ij}(t)$ & in a multistate model, the indicator that subject $i$ is
+        at risk for a transition out of state $j$ \\
+    $X$ & $n$ by $p$ matrix of predictors where $p$ is the number of predictors,
+          $X_i$ the row vector for observation $i$ \\
+    $w$ & vector of case weights for the subjects, $W$ a diagonal matrix of
+         the weights \\ 
+    $\beta$ & vector of estimates \\
+    $\eta = X\beta$ & vector of linear predictors \\
+  \end{tabular}
+\end{center}
+
+
+The most common estimates of the cumulative hazard and survival are
+the Nelson-Aalen and Kaplan-Meier estimates, sometimes Fleming-Harrington
+\begin{align}
+  \lhat(t) &=  \frac{\sum w_i dN_i(s)}{\sum_i w_i Y_i(s)} \nonumber \\
+  \Lhat(t) &= \int_0^t \lhat(s)  \nonumber \\
+  \Shat(t) &= \prod_{s \le t} \left( 1- \frac{\sum w_i dN_i(t)}{\sum_i Y_i(t)}
+       \right)  \nonumber \\
+        &=  \prod_{s \le t} \left( 1- \lhat(s) \right) \\
+  FH(t) &= \prod_{s \le t} e^{-lhat(t)} = \exp(-\Lhat(t)) \\
+     M_i(t) &= N_i(t) - Y_i(t)\Lhat(t) \nonumber
+\end{align}
+
+For a multi-state model, let $A$ be the transition matrix.
+\begin{equation*}
+  A(t) = \left( \begin{array}{ccccc} 
+    \Box & \lambda_{12}(t) & \lambda_{13}(t) & \lambda_{14}(t) & \ldots \\
+    \lambda_{21}(t) & \Box & \lambda_{23}(t) & \lambda_{24}(t) & \ldots \\
+    \lambda_{31}(t) & \lambda_{32}(t) & \Box & \lambda_{34}(t) & \ldots \\
+    \vdots & \vdots & \vdots & \vdots & \ddots
+    \end{array} \right)
+\end{equation*}
+
+The diagonal elements of $A$ as such that row sums are zero.
+Then we have
+
+\begin{align}
+  p(t) &= p_0(t) \prod_{s \le t} \exp(I+ A(s)) \label{AJ1} \\
+       &= p_0(t) \prod_{s \le t} \exp(A(s)) \label{AJ2}
+\end{align}
+Note that \eqref{AJ1} is a first order Taylor series for \eqref{AJ2}.
+
+When $\hat\lambda(t)$ are the simple rates
+$$
+ \hat\lambda_{jk}(t)= \frac{\sum_i dN_{ijk}(t)}{\sum_i Y_{ij}(t)}
+$$
+then 
+\begin{itemize}
+  \item Equation \eqref{AJ1} is the Aalen-Johansen estimator.
+  \item If there are only 2 states, it is equal to the Kaplan-Meier
+  \item Essentially no one uses equation \eqref{AJ2}
+\end{itemize}
+
+When $\hat\lambda_{jk}(t;z)$ is the predicted hazard from a Cox model
+$$
+ \hat\lambda_{jk}(t;z)= \frac{\sum_i dN_{ijk}(t)}{\sum_i Y_{ij}(t)e^{(X_i-z)\hat\beta}}
+$$
+then
+\begin{itemize}
+  \item If there are only 2 states
+    \begin{itemize}
+      \item Equation \eqref{AJ2} is the Breslow estimate of survival
+      \item No one uses equation \eqref{AJ1}
+    \end{itemize}
+  \item For > 2 states
+    \begin{itemize}
+      \item The ``Scandanvian school'' all use \eqref{AJ1} for theory
+      \item The mstate library uses \eqref{AJ1}, but with a caveat
+      \item The stochastic process literature uses \eqref{AJ2}
+      \item The survival, mshmm, msm packages use \eqref{AJ2}
+   \end{itemize}
+\end{itemize}
+
+If the prediction is for a subject with large risk and the number at risk at time
+$t$ is small, then the $I+A$ formula can lead to a negative element in $p(t)$.
+When this happens, the mstate program fudges the estimate.
+For great majority of cases, the numeric difference between the two methods
+will be negligible.
+
+
+\section{Intermittenly observed MSH models}
+Assume a multi-state hazard model with transition rates between states $j$
+and $k$ of $\lambda_{jk}(t)\exp(X\beta)$
+For an event based MSH (survival package) this is broken into a baseline
+hazard and covariate based hazard ratios:
+\begin{align*}
+  r_i(\beta,t) &= exp(X_i(t) \beta) \\
+  PL(\beta) &= \prod_{jk} \left[
+    \prod_t \frac{\sum_i dN_{ijk}(t) r_i} {\sum_i Y_{ij}(t)r_i} \right]
+\end{align*}
+
+Notice that the hazard does not appear.  We can maximize $\hat\beta$ and then
+form estimates of absolute risk $p(t;z)$ for any desired covariate.
+Key assumptions that are needed to compute the above are
+\begin{itemize}
+  \item Over a subject's time at risk, all transitions are observed.
+  \item The time of each transition, and the risk set for that transtion,
+    are known.
+\end{itemize}
+
+In an mshmm or msm model the likelihood is based not on observed 
+\emph{transtions} but rather on observed \emph{states}.
+A classic framework for this is panel data, where subjects
+come in a regular intervals and a panel of markers is measured.
+When a new condition occurs, the inception time of the condition would only
+be known in an interval.
+
+In the mshmm code, for each trial solution of $\hat\beta$ and each subject $i$
+\begin{enumerate}
+  \item Compute the predicted curve $p(t;x_i)$ for the subject. (For the moment
+    assume the covariate $x_i(t)$ is not time-dependent).
+  \item Compare the prediction to the observed state for subject $i$, at each
+    observation time $t_{ij}$ for that subject.
+  \item Use this to compute an updated $\hat\beta$.
+\end{enumerate}
+I
+The notation within the codee replaces $p(t)$ with $\alpha(t)$, a working
+probabilty. For simple panel data it looks like this.  There is a separate
+computation for each subject.
+
+\begin{enumerate}
+  \item Set $\alpha(0)$ to the starting state for the subject, i.e., 
+    (0, 0, \ldots, 1, 0, 0, \ldots) where there is a 1 for their observed
+    starting state.
+  \item $\alpha(t_1) = \alpha(t_0) e^{t_1A(x,\hat\beta}$ where $A$ is the matrix 
+    of rates for this subject. This is provisional.
+  \item If the subject was observed at time $t_1$, restrict their $\alpha(t_1)$ 
+    by setting to 0 all of the ``states where they ain't'', i.e., all elements 
+    of $\alpha$ except the observed state
+  \item $\alpha(t_2) = \alpha(t_0) e^{(t_2-t_1) A(x,\hat\beta}$ 
+  \item Restrict $\alpha(t_2)$
+  \item \dots
+\end{enumerate}
+
+The final log-likekihood for the subjects is $\log(\sum(\alpha_i))$. Add this
+up over subjects. Find the $\hat\beta$ that maximizes.
+We next extend this simple algorithm in 4 ways: flexible baseline hazards and
+time-dependent covariates,
+exact observation (death), partially observed states, and hidden Markov
+models.
+
+The equation $y=exp(At)$ is the solution to the differential equation
+$dy/dt= A$, i.e., the case of constant transition rates over a time
+period $(0,t)$.  A time dependent covariate needs to be expressed
+as a series of intervals $(t_0, t_1)$, $(t_1, t_2)$, \ldots with the
+covariate as a constant over that interval.  A very common time dependent
+covariate in our models is either current age or current time.
+
+The mshmm and msm functions use an explicit baseline hazard.
+In the biomedical problems we work with the assumption of a constant
+baseline hazard, i.e., a single intercept term $\beta_0$ is unrealistic.
+A plot of US life tables shows that for ages over 50, death rates are
+close to $\exp(\beta_0 + \beta_1 a$ where $a$ is current age. Since the
+mshmm, msm, and coxph functions all use $\exp(X\beta)$ (it avoids negative
+hazards, i.e., the dead coming back to life), a linear age term is often a
+good start, though it will often need to be updated to a spline.  Likewise
+for time since enrollment.
+
+Three centuries of work with national life tables has shown that, except for
+the very young, yearly death rates are a sufficiently fine division of
+age, and we will often use integer age as a covariate, it increase by 1 at
+each birthday.  If follow-up for any given subject is fairly short, age
+at enrollment may sometimes suffice.
+
+A general equation for a given subject looks like below, ignoring the $i$ 
+subscripts; $\alpha$ a vector with one element per state.
+$$
+\alpha = \alpha(t_0)D(t_0,\theta) \, e^{(t_1-t_0)A(t_0, \beta)}D(t_1, \theta)\,
+     e^{(t_2-t_1)A(t_1, \beta)}D(t_1, \theta) \ldots
+$$
+
+There are types of possible observations at time $t$ in the above
+\begin{itemize}
+ \item The hazard matrix at time $t$ will have $jk$ element of
+   $\exp(X_i(t)\beta$ for any transition that can occur, 0 otherwise.
+ \item The forward transtion matrix from a time $t_m$ to $t_{m+1}$ depends on the
+   rate matrix at time $t_m$ and the size of the forward step
+  \item There are 5 types of possible observation at the time point
+    \begin{itemize}
+  \item For time points without an observation, e.g., extra times inserted in
+    the data set to advance the age variable, $D= I$, the identity matrix.
+  \item Interval censored state $k$ was observed.  $D_{kk}=1$ and the remaining
+    elements are 0.
+  \item A partial state was observed, e.g., the subject is in some set of
+    states a, b, c, \ldots.  $D=0$ except for $D_{aa}$, $D_{bb}$, etc. 
+    This applies by the way to an observation of ``alive''.
+  \item A death or other exact time was observed, and is state $k$.
+    $D_{jk} = \lambda_{jk}(t)$ for $j/ne k$, otherwise $D=0$.
+  \item A marker variable was observed with value $y$, then
+    $D_{jj}= f(y| state=j)$
+\end{itemize}
+\end{itemize}
+
+The choices for $\alpha(t_0)$ and $D(t_0)$ can be more involved.
+
+
+\end{document}
