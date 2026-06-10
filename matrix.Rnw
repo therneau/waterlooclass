@@ -118,11 +118,11 @@ then
       \item Equation \eqref{AJ2} is the Breslow estimate of survival
       \item No one uses equation \eqref{AJ1}
     \end{itemize}
-  \item For > 2 states
+  \item For more than 2 states
     \begin{itemize}
-      \item The ``Scandanvian school'' all use \eqref{AJ1} for theory
-      \item The mstate library uses \eqref{AJ1}, but with a caveat
+      \item The ``Scandanvian school'' use \eqref{AJ1} for theory
       \item The stochastic process literature uses \eqref{AJ2}
+      \item The mstate library uses \eqref{AJ1} (mostly)
       \item The survival, mshmm, msm packages use \eqref{AJ2}
    \end{itemize}
 \end{itemize}
@@ -140,7 +140,7 @@ and $k$ of $\lambda_{jk}(t)\exp(X\beta)$
 For an event based MSH (survival package) this is broken into a baseline
 hazard and covariate based hazard ratios:
 \begin{align*}
-  r_i(\beta,t) &= exp(X_i(t) \beta) \\
+  r_i(\beta,t) &= \exp(X_i(t) \beta) \\
   PL(\beta) &= \prod_{jk} \left[
     \prod_t \frac{\sum_i dN_{ijk}(t) r_i} {\sum_i Y_{ij}(t)r_i} \right]
 \end{align*}
@@ -155,7 +155,7 @@ Key assumptions that are needed to compute the above are
 \end{itemize}
 
 In an mshmm or msm model the likelihood is based not on observed 
-\emph{transtions} but rather on observed \emph{states}.
+\emph{transtions} but on observed \emph{states}.
 A classic framework for this is panel data, where subjects
 come in a regular intervals and a panel of markers is measured.
 When a new condition occurs, the inception time of the condition would only
@@ -169,85 +169,102 @@ In the mshmm code, for each trial solution of $\hat\beta$ and each subject $i$
     observation time $t_{ij}$ for that subject.
   \item Use this to compute an updated $\hat\beta$.
 \end{enumerate}
-I
-The notation within the codee replaces $p(t)$ with $\alpha(t)$, a working
-probabilty. For simple panel data it looks like this.  There is a separate
-computation for each subject.
 
-\begin{enumerate}
+There is a separate computation for each subject.
+The notation in the msm package introduces a \emph{working} estimate
+$\alpha(t)$. Here is the algorithm for panel data written more carefully.
+
+\begin{itemize}
   \item Set $\alpha(0)$ to the starting state for the subject, i.e., 
     (0, 0, \ldots, 1, 0, 0, \ldots) where there is a 1 for their observed
     starting state.
-  \item $\alpha(t_1) = \alpha(t_0) e^{t_1A(x,\hat\beta}$ where $A$ is the matrix 
-    of rates for this subject. This is provisional.
+  \item $\alpha(t_1) = \alpha(t_0) e^{t_1A(x,\hat\beta)}$ where $A$ is the matrix 
+    of rates for this subject. 
   \item If the subject was observed at time $t_1$, restrict their $\alpha(t_1)$ 
     by setting to 0 all of the ``states where they ain't'', i.e., all elements 
-    of $\alpha$ except the observed state
-  \item $\alpha(t_2) = \alpha(t_0) e^{(t_2-t_1) A(x,\hat\beta}$ 
+    of $\alpha$ except the observed state.
+  \item $\alpha(t_2) = \alpha(t_1) e^{(t_2-t_1) A(x,\hat\beta)}$ 
   \item Restrict $\alpha(t_2)$
   \item \dots
-\end{enumerate}
+\end{itemize}
 
-The final log-likekihood for the subjects is $\log(\sum(\alpha_i))$. Add this
-up over subjects. Find the $\hat\beta$ that maximizes.
+The final likekihood for the subject is $\sum_j(\alpha_j)$ where $j$ are
+the states.  Add this up over subjects: $\sum_i \log(\sum_j(\alpha_{ij})$,
+and find the $\hat\beta$ that maximizes this. (Which is easier said than done.)
+
 We next extend this simple algorithm in 4 ways: flexible baseline hazards and
 time-dependent covariates,
 exact observation (death), partially observed states, and hidden Markov
 models.
 
-The equation $y=exp(At)$ is the solution to the differential equation
+The equation $y=\exp(At)$ is the solution to the differential equation
 $dy/dt= A$, i.e., the case of constant transition rates over a time
 period $(0,t)$.  A time dependent covariate needs to be expressed
-as a series of intervals $(t_0, t_1)$, $(t_1, t_2)$, \ldots with the
-covariate as a constant over that interval.  A very common time dependent
-covariate in our models is either current age or current time.
+as a series of intervals $(t_0, t_1)$, $(t_1, t_2)$, \ldots along with an
+assumption that the covariate is constant over each interval.
 
-The mshmm and msm functions use an explicit baseline hazard.
-In the biomedical problems we work with the assumption of a constant
+A very common time dependent
+covariate in our models is either current age or current time.
+The mshmm and msm functions use an explicit baseline hazard, and
+in the biomedical problems we work with the assumption of a constant
 baseline hazard, i.e., a single intercept term $\beta_0$ is unrealistic.
 A plot of US life tables shows that for ages over 50, death rates are
 close to $\exp(\beta_0 + \beta_1 a$ where $a$ is current age. Since the
 mshmm, msm, and coxph functions all use $\exp(X\beta)$ (it avoids negative
 hazards, i.e., the dead coming back to life), a linear age term is often a
-good start, though it will often need to be updated to a spline.  Likewise
+good start, though it may need to be updated to a spline.  Likewise
 for time since enrollment.
 
 Three centuries of work with national life tables has shown that, except for
 the very young, yearly death rates are a sufficiently fine division of
-age, and we will often use integer age as a covariate, it increase by 1 at
-each birthday.  If follow-up for any given subject is fairly short, age
-at enrollment may sometimes suffice.
+age, and we will often use integer age as a covariate, an increase by 1 at
+each birthday.  Though if follow-up for any given subject is fairly short, age
+at enrollment will sometimes suffice.
 
-A general equation for a given subject looks like below, ignoring the $i$ 
-subscripts; $\alpha$ a vector with one element per state.
+A general equation for a given subject $i$ looks like below, ignoring the $i$ 
+subscripts; $\alpha$ is a vector with one element per state.
 $$
-\alpha = \alpha(t_0)D(t_0,\theta) \, e^{(t_1-t_0)A(t_0, \beta)}D(t_1, \theta)\,
-     e^{(t_2-t_1)A(t_1, \beta)}D(t_1, \theta) \ldots
+\alpha = \left[\alpha(t_0)D(t_0,\theta)\right] 
+     \left[e^{(t_1-t_0)A(t_0, \beta)}D(t_1, \theta)\right]
+     \left[e^{(t_2-t_1)A(t_1, \beta)}D(t_1, \theta) \right] \ldots
 $$
 
-There are types of possible observations at time $t$ in the above
 \begin{itemize}
  \item The hazard matrix at time $t$ will have $jk$ element of
-   $\exp(X_i(t)\beta$ for any transition that can occur, 0 otherwise.
- \item The forward transtion matrix from a time $t_m$ to $t_{m+1}$ depends on the
+   $\exp(\eta{ijk})$, $\eta_i= X_i(t)B$ for any transition that can occur, 
+   0 otherwise.  $B$ is a matrix of coefficients, one column per transition.
+ \item The forward transtion matrix from time $t_m$ to $t_{m+1}$ depends on the
    rate matrix at time $t_m$ and the size of the forward step
-  \item There are 5 types of possible observation at the time point
+  \item There are 5 types of possible observations at the time point
     \begin{itemize}
-  \item For time points without an observation, e.g., extra times inserted in
+  \item For time points without a patient observation, e.g., extra times inserted in
     the data set to advance the age variable, $D= I$, the identity matrix.
   \item Interval censored state $k$ was observed.  $D_{kk}=1$ and the remaining
     elements are 0.
   \item A partial state was observed, e.g., the subject is in some set of
-    states a, b, c, \ldots.  $D=0$ except for $D_{aa}$, $D_{bb}$, etc. 
+    states a, b, c, \ldots.  
+    Then $D=0$ except for $D_{aa}$, $D_{bb}$, etc. 
     This applies by the way to an observation of ``alive''.
   \item A death or other exact time was observed, and is state $k$.
-    $D_{jk} = \lambda_{jk}(t)$ for $j/ne k$, otherwise $D=0$.
+    Then $D_{jk} = \lambda_{jk}(t)$ for $j/ne k$, otherwise $D=0$.
   \item A marker variable was observed with value $y$, then
-    $D_{jj}= f(y| state=j)$
+    $D_{jj}= f(y| s=j)$ where $s$ is the true, but unknown, state.
 \end{itemize}
 \end{itemize}
 
-The choices for $\alpha(t_0)$ and $D(t_0)$ can be more involved.
+The starting point $\alpha(t_0)$ often has very little to do with the
+disease process, and instead is a function of the recruitment strategy
+for the study. 
+In the Mayo Clinic Study of Aging, for instance, invitation letters were sent
+to an age and sex stratified sample from Olmsted County, Minnesota. The initial
+state of the recipients will be the age-specific state distribution for the
+population, but the distribution of states for those who accepted somewhat
+different, see Roberts et al (PMID: 18259084).  
+In a study which recruits from subjects who are seeking treament, what subset
+and frequency of disease states are they likely to represent?
 
+One possible approach is to assume a multinomial distribution for starting state
+and jointly solve for those parameters at the same time as the those for the
+transitions.
 
 \end{document}
