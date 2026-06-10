@@ -24,8 +24,9 @@ code needed. Some mathematics will appear, but only to help clarify the
 models.
 
 For all the models, key first steps are
+
  * What data do we have, and what questions *could* be answered with that data?
- * The overall goal: what aspects of the process(es) do we wish to
+ * The overall target: what aspects of the process(es) do we wish to
  describe, and in relation to what predictors? No paper can do everything.
  * Lay out the multi-state model as a diagram. Refer to it often.
  * Create the analysis data set, with particular attention to questions of
@@ -34,6 +35,7 @@ For all the models, key first steps are
    special cases. There are invariably one or two.
    
 Mathematically we describe out multistate model in terms of three processes.
+
  * $N_{ijk}(t)$ = the number of observed transitions from state $j$ to state $k$,
    up to time $t$ for subject $i$. 
  * $Y_{ij}(t)$ equals 1 if subject $i$ is currently in state $j$, at time $t$, 
@@ -44,12 +46,11 @@ Mathematically we describe out multistate model in terms of three processes.
    of these covariates will remain static, e.g., treatment arm or sex, while 
    others are time-dependent, e.g. cholesterol might be remeasured at each visit.
 
-There is a subtle difference between "at risk for an event" and "at risk for
-an observed event", i.e., one that will be, if it occurs, captured in the data.
-If subject $i$ has incomplete follow-up, "censoring", then
-$Y_i(t)$ for observed events will become 0 sometime before they enter an 
-absorbing state. In this document I will largely ignore this, and use $Y, N, X$
-to refer to observed data. If censoring is not random, however, then our
+Any careful investigation of the theory behind these models will need to
+distinguish between "at risk for an event" and "at risk for an observed event".
+In this document I will largely ignore this, and use $Y, N, X$
+to refer to observed data.
+ If censoring is not random, however, then the two notions are not the same,
 estimators can be biased, and any investigation into the hows and whys of that
 bias will need to carefully distinguish them.
 
@@ -58,8 +59,8 @@ bias will need to carefully distinguish them.
 In our opinion, one of the greatest threats to valid medical research is the 
 presence of immortal time bias (ITB). In short, for a valid time-to-event
 model none of $N(t)$, $Y(t)$ nor $X(t)$ can contain values that depend on the
-future. In our personal experience, MSH models provide, unfortunately, even
-more opportunites for this error, ones which are sometimes difficult to spot.
+future. MSH models, unfortunately, provide even more opportunities for
+this error to creep in, ones which are sometimes difficult to spot.
 The number of ways to create ITB appears to be near infinite. Here are a few
 examples.
 
@@ -67,20 +68,42 @@ fill in later
 
 ## Timeline data
 The survival package supports two forms of multistate data. The older and
-better known one is referred to as counting process form. 
+better known one will be referred to as counting process form. 
 The first 3 lines below show the myeloid data in its raw form as found in
-the survival package.
-The next lines show the timeline form. The code to create mdata1 will come
-later.
+the survival package, followed by the counting process form.
+The the tmerge call to create mdata1 will be discussed later.
 
-```{r, echo=FALSE}
+```{r, mdata1}
 library(survival)
+library(mshmm)
 table2 <- function(...) table(..., useNA="ifany")
 
 # we will show this later
 mdata1 <- tmerge(myeloid[,1:4], myeloid, id=id, death= event(futime, death),
-                 cr = event(crtime), sct= event(txtime), relapse=event(rltime))
+                 CR = event(crtime), SCT= event(txtime), relapse=event(rltime),
+                 priorcr = tdc(crtime), priorsct= tdc(txtime))
 
+subset(myeloid, id<4)
+
+subset(mdata1, id<4)
+```
+Each row of data in the timeline form consists of a subject id,
+a time interval (tstart, tstop], the event(s) that occur at the end of the
+interval (death, complete response, stem cell transplant, relapse), 
+and covariates (trt, sex, flt3, priorcr, priorsct).
+Covariate apply over the entire interval (tstart, tstop].
+Notice the difference between the event variable `CR` and the
+time-dependent covariate `priorcr`.
+Subject 1 experienced CR on day 44; the CR variable is 1 at the end of that
+first (0,44] interval and 0 thereafter. 
+The time-dependent covariates priorcr becomes 1 at interval (44,113] 
+and remains 1 thereafter. 
+The fixed covariates of treatment, sex, and FLT3 repeat from row
+to row.
+
+Now the timeline form of these 3 subjects.
+
+```{r, echo=FALSE}
 t1 <- with(myeloid, data.frame(id, trt, sex, flt3, time=0))
 t2 <- with(subset(myeloid, !is.na(txtime)), data.frame(id, time=txtime,
                                                        sct=1))
@@ -97,44 +120,41 @@ mdata2 <- merge(mdata2, t5, all=TRUE)
 indx <- match(mdata2$id, myeloid$id)
 for (i in c("trt", "sex", "flt3")) mdata2[,i] <- myeloid[indx, i]
 ```
-```{r, timeline, echo=TRUE}
-subset(myeloid, id<4)
 
-subset(mdata1, id<4)
-```
-Each row of data in the timeline form consists of a subject id,
-a time interval (tstart, tstop], the event(s) if any that occur
-(death, cr, sct, relapse), and covariates (trt, sex, flt3).
-Covariate apply over the entire interval (tstart, tstop], and events
-happen at the end of the interval.
-In this particular data set there are no time-dependent covariates, and multiple
-possible endpoints: complete response, stem cell transplant, relapse, and death.
-
-Now the timeline form of these 3 subjects.
 ```{r, echo=TRUE}
 subset(mdata2, id<4)
 ```
+
 In timeline data each row has a unique (subject identifier, time) pair, along
 with all the information that was observed at that time, with missing values
-for things that were not observed. Timeline data sets have many NA values.
-Static variables like treatment, sex and FLT3 state at randomization can be
-filled in for every row, as was done here, or not. (The analysis code can
-deal with either.)  One could argue for instance that FLT3 was
-only observed at the start since a pathology assessment was not repeated,
-so should be NA on row 2,
-and certainly that none of these covariates were observed on the day of death.
+for variables or outcomes that were not observed. 
+Timeline data sets have many NA values.
+Static variables like treatment, sex and FLT3 state at randomization would 
+normally be filled in for every row, as was done here. 
+One could argue, however, that FLT3 was
+only observed at the start, since a pathology assessment was not repeated,
+so should be NA on row 2-4.
+Normally, most covariates will be non-missing at baseline, e.g., we know that
+CR, SCT, relapse and death have not yet occured so would be 0.
+The NA in this case is a function of how we created the data, and will be
+handled properly by both Surv2 and lvcf since they are 0/1 (or FALSE/TRUE)
+variables.
 
 For simple survival timeline style makes little sense: each subject will have
 to have two rows, one at 0 with the covariates and another at the death/censoring
 time with all covariates missing.
-For more complex data they have two advantages
+For more multistate data there may be advantages.
 
  * Counting process data sets often require the use of tmerge, which
    can be tricky. Timeline data can be built using more standard tools, which
-   may be easier
+   may be easier.
+ * There is only one CR and one SCT variable, not two of each.
+   The choice between using a covariates as
+   an endpoint or a time-dependent covariate is derferred until is actually
+   appears in a model statement, on either the left hand side (as an event) or
+   right hand side (as a covariate).
  * If one is rigorous with respect to the "observed at this time" rule for each
-   line of data, most immortal time bias problems will be avoided
-
+   line of data, many immortal time bias problems will be avoided.
 
 # Example 1, NAFLD
 The NAFLD data is found in 3 data sets. 
@@ -179,9 +199,9 @@ statefig(rbind(4,1), nmat)
 ```
 
 In the nafld1 data set, the case.id variable, for a control, gives the
-id of the case they were matched with.
-For the incident cases, we set case.id = id.
-The nafld3 data also has nafld diagnosis, so check the consistency.
+id of the case they were matched with;
+the incident cases have case.id = id.
+The nafld3 data also has nafld diagnosis, so check for consistency.
 
 ```{r, nafld3}
 ndata <- nafld1  # working data set
@@ -190,35 +210,30 @@ ndata$nafld <- 1*(ndata$id == ndata$case.id) # create a variable
 table(ndata$nafld)
 ndx  <- subset(nafld3, event=="nafld")
 table(ndx$days==0)
-
-subset(ndx, days>0)[1:5,]
-subset(ndata, case.id == 13)
-
-temp <- subset(ndx, days==0 & !(id %in% ndata$id[ndata$nafld==1]))
-dim(temp)
-temp[1:5,]
-subset(ndata, id %in% c(805, 3158))
-subset(ndata, case.id == 805)
-
 ```
 
 What is going on?
- 1. 318 subjects who where chosen as controls were found to have NAFLD later
- in life. You cannot exclude someone as a control at age 45 based on something
- that will happen to them some years later: this is a form of immortal time
- bias. When that control later became a case, 4 new controls for them were
+
+ 1. The 318 NAFLD diagnoses after day 0 are subjects who where chosen as 
+ controls, who were found to have NAFLD later
+ in life. You cannot exclude someone as a control at age $a$ based on something
+ that will happen to them some years later at age $a +s$: 
+ this would be a form of immortal time bias.
+ When that control later became a case, 4 new controls for them were
  selected. 
- 2. At this time NAFLD had a funny definition: if someone had fatty liver but
- also say a hepatitis C diagnosis, then they "didn't have" NAFLD. The study
- question was more or less the consquences if NAFLD was the *only* liver
- disease.
+ 2. At this time NAFLD had an interesting definition: 
+ if someone had fatty liver but also say a hepatitis C diagnosis,
+ then they "didn't have" NAFLD. The study question was thus
+ more or less the consquences if NAFLD was the *only* liver disease.
  3. What about hepatitis C 2 weeks later, 6 weeks later, ... The diagnostic
  process for someone with a GI complaint can sometimes stretch out for months,
  so the decision was that "real" NAFLD starts once 12 months has passed 
  without another smoking gun. This is day 0.
  4. Controls need to matched on this new date, otherwise the NAFLD subjects
  will benefit from immortal time bias.
- 5. The 19 confuse me. Perhaps I made a mistake when going from dates
+ 5. The 19 who have NAFLD at day 0, but are not an incident case, are confusing.
+ A of the 19 (not shown) reveals that all were originally chosen as a control.
+ Perhaps I made a mistake when going from dates
  to days? (It should be "days from inital recruitment" for all).
  
 "If you don't know where you are going, you might end up someplace else". 
@@ -261,23 +276,53 @@ round(temp/nrow(tdata1), 2)
 ndata2 <- tmerge(tdata1[c(1,2,3,6:7,10)], tdata1, id=id, 
                  death= event(futime, status),
                  options=list(tstartname="day1", tstopname="day2"))
-ndata2 <- tmerge(ndata2, enddata, id=id, mcount=cumtdc(days), 
-                 mevent= cumevent(days))
-subset(ndata2, id <8)
-summary(ndata2)
+# Add the MC one by one
+ndata2 <- tmerge(ndata2, subset(enddata, event=="diabetes"), id=id, 
+                 diabetes= event(days), prior.diab= tdc(days))
+ndata2 <- tmerge(ndata2, subset(enddata, event=="dyslipidemia"), id=id, 
+                 dyslipid = event(days), prior.dysl= tdc(days))
+ndata2 <- tmerge(ndata2, subset(enddata, event=="htn"), id=id, 
+                 htn = event(days), prior.htn= tdc(days))
 
-ndata2$istate <- factor(ndata2$mcount, 0:3, nstate[1:4])
-temp <- ifelse(ndata2$death==1, 4, ndata2$mevent)
-ndata2$event <- factor(temp, 0:4, c("censor", nstate[-1]))
+# alternate: add them all at once
+ndata2b <- tmerge(ndata2, enddata, id=id, mcount=cumtdc(days), 
+                 mevent= cumevent(days))
+#
+subset(ndata2, id <8)
+summary(ndata2)  # a step by step summary of the additions
+
+# Create the combined endpoint
+nstate <- c("0MC", "1MC", "2MC", "3MC", "death")
+temp1 <- with(ndata2, prior.diab + prior.dysl + prior.htn)
+temp2 <- with(ndata2, diabetes + dyslipid + htn)
+ndata2$istate <- factor(temp1, 0:3, nstate[1:4])
+# temp3 = death(4), or on the day of a new MC, the new cumulative number
+temp3 <- ifelse(ndata2$death==1, 4, ifelse(temp2==0, 0, temp2+temp1))
+ndata2$event <- factor(temp3, 0:4, c("censor", nstate[-1]))
 check1 <-survcheck(Surv(day1, day2, event) ~1, data=ndata2, 
                    id=id, istate=istate)
 check1
 
+# This won't be used further, but create the 9 state outcome of Diabetes,
+#  dyslipidemia=L and hypertension=H
+temp1 <- with(ndata2, prior.diab + 2*prior.htn + 4*prior.dysl)
+temp2 <- with(ndata2, diabetes + 2*htn + 4*dyslipid)
+e1 <- with(ndata2, paste0(ifelse(prior.diab==1, "D", ""),
+                          ifelse(prior.htn ==1, "H", ""),
+                          ifelse(prior.dysl==1, "L", "")))
+e1 <- ifelse(e1=="", "none", e1)
+elab <- c("none", "D", "H", "L", "DH", "DL", "HL", "DHL") #preferred order
+ndata2$e1 <- factor(e1, elab)
+
+e2 <- ifelse(ndata2$death==1, 9, ifelse(temp2==0, 0, temp1+temp2))
+ndata2$e2 <- factor(e2, c(0, 1,2,4,3,5,6,7,9), c("censor", elab[-1], "death"))
+check2 <- survcheck(Surv(day1, day2, e2) ~ 1, ndata2, id=id, istate=e1)
 ```
 
 For an MSH model fit with survfit or coxph the underlying likelhood is
 event based. 
 Each observed event contributes a term to the likelihood, and presumes
+
  * over the window of observation for a subject, all the transitions for
    that subject are recorded
  * the window of observation is complete, i.e., it includes all times at
@@ -286,8 +331,8 @@ Each observed event contributes a term to the likelihood, and presumes
 
 One consequence of the first is that we do not need to inform the routine
 of which transitions can occur, and which are (effectively) absorbing: it
-tabulate them on its own.
-But, we need to check that it's assessment agrees with our own. In this
+tabulates them on its own.
+But, we do need to check that it's assessment agrees with our own. In this
 case we have some jumps that were not in our original concept.
 
 ```{r, nfig2}
@@ -309,27 +354,42 @@ naj <- survfit(Surv(age1, age2, event) ~ male, ndata2, id=id, istate=istate,
                p0= c(1,0,0,0,0), start.time=50)
 
 dim(naj)
-plot(naj[,2:5], lwd=2, lty=1:2, col=rep(1:4, each=2), xmax=100,
+plot(naj[1,2:5], lwd=2, col=1:4, xmax=100,
      xlab="Age", ylab="Probability in state")
-#plot(naj[1,], cumprob=2:5, col=1:4, yaxs='i', xmax=100,
+plot(naj[1,], cumprob=2:5, col=1:4, yaxs='i', xmax=100,
+     xlab="Age", ylab="Probability in state")
+#plot(naj, cumprob=2:5, lty=1:2,  col=rep(1:4, each=2), yaxs='i', xmax=100,
 #     xlab="Age", ylab="Probability in state")
-#text(c(55, 68, 77, 79, 89), c(.8, .11, .37, .57, .69), nstate,
-#     col=c(1,1,2,3,4))
+text(c(55, 68, 77, 79, 89), c(.8, .11, .37, .57, .69), nstate,
+     col=c(1,1,2,3,4))
 
 dim(naj$cumhaz)
-colSums(naj$n.transition)
+plot(naj[1,], cumhaz=TRUE, col=1:5, lty=1:2, 
+     xlab="Age", ylab="Cumulative Hazard")
 ```
-
+The first two plots show probability in state, for females only,
+in two different forms
+Some users prefer the first, some the second.
+The second figure is closely related to a stacked bar chart; the probability in
+state is the difference between two curves.
+The third plot shows the 10 separate estimated hazard curves.
 The probability in state estimates are mostly oblivious to the presence 
-of  0mc:2MC, 0MC:3MC and 1MC:3MC transtions, but the hazard
-estimates for those will be based on very small numbers.
+of  0mc:2MC, 0MC:3MC and 1MC:3MC transtions, but the hazard is estimated
+separately for each pair, some of which have small numbers.
 This affects the multi-state Cox model as well, since it is focused on hazards.
 
 ```{r, nacox1}
 nacox1 <- coxph(Surv(age1, age2, event) ~ nafld + male,
                 data=ndata2, id=id, istate=istate)
 nacox1$cmap
+```
 
+The simple Cox model failed to converge. The coefficient map showed that 
+coefficient 8 is associated with the 1:4 transition, which involves
+only a handful of subjects.
+To ameliorate this, bundle the coeffients for the small transitions.
+
+```{r}
 nacox2 <- coxph(list(Surv(age1, age2, event) ~ nafld + male,
                      1:2 + 1:3 + 1:4 ~ nafld + male /common,
                      2:3 + 2:4 ~ nafld + male /common,
@@ -338,21 +398,15 @@ nacox2 <- coxph(list(Surv(age1, age2, event) ~ nafld + male,
 nacox2
 
 round(coef(nacox2, matrix=TRUE),3)
-
-nacox3 <- coxph(list(Surv(day1, day2, event)~  nafld+ bmi + strata(case.id),
-                       1:2 + 1:3 + 1:4 ~ nafld + bmi /common,
-                       2:3 + 2:4 ~ nafld + bmi / common), 
-                data=ndata2, id=id, istate=istate)
-nacox3
 ```
 
-Because all the covariates are all time fixed, absolute risk estimates are
+Because all the covariates are time fixed, absolute risk estimates are
 fairly easy to get. For a Cox model, predictions are available for any
 a priori combination of covariates, which we provide in a dummy data set.
 Since it is multistate, we need to give a distribution of starting
 states, and since we are on age scale a starting time.
 (If you don't give these it will guess. I don't think I have every found the
-result of that to be useful.)
+result of that guess to be useful.)
 
 ```{r, absnafld}
 dummy <- expand.grid(male=0:1, nafld=0:1)
@@ -369,12 +423,14 @@ rbind(sojourn, Total= colSums(sojourn))
 
 plot(coxsurv2[,-1], col=1:4, lty=rep(1:4, each=4))
 ```
+
 * The mean time in state has to add to (100-45)= 55, across the states.
-* Subscripting the curves is a useful tool
+* Subscripting the curves is a useful tool.
 * The simple plot has too many curves, it looks like a bowl of spaghetti.
   Better plotting requires artistic choices.
-* For a stratified model, the defalt plot will have a set of curves per
-  stratum, which is not useful here.
+* For the stratified model, the defalt plot will have a set of curves per
+  stratum, `r length(unique(ndata$case.id))` times 5 states, which is 
+  obviously not useful.
 
 ```{r, absnafld2}
 opar <- par(mfcol=c(2,2), mar=c(5,5,2,1))
@@ -400,7 +456,6 @@ able to reproduce Jack et al (2022) quite well, so we will use it for analysis.
 This data set is already in timeline form.
 
 ```{r, mcsa1}
-library(mshmm)
 mstate <- c("CU", "MCI", "dementia", "death")
 mmat <- matrix(0, 4, 4, dimnames=list(mstate, mstate))
 mmat[1,2] <- mmat[2,3] <- 1
@@ -414,13 +469,16 @@ survcheck(Surv2(age, dx, repeated=TRUE) ~1, id=ptnum, dementia)$transitions
 survcheck(Surv2(age, dx) ~1, id=ptnum, data = dementia)
 ```
 We can see several things by looking at this table.
+
   * The survcheck routine was written for counting process data.
     One aspect of Surv2, which translates from timeline form to that form,
     is the repeated argument.  When a subject has two sequential visits in
     the same state, the survfit and coxph routines need to know whether to
     treat the second observation as a new event. Most of the time they
-    should not, repeated infections in the CGD data set is a counterexample,
-    however.  In this data each row is a visit, the repeated form clearly shows
+    should not: if "diabetes" is recorded in the medical history for 5 visits
+	in a row this is not 5 new instances of the condition.
+	Repeated infections in the CGD data set is a counterexample, however.
+	In this data each row is a visit, the repeated form clearly shows
     that over half of all visit pairs are CU:CU; most patients stay stable for
     many years before progression.  The (any) row of the total visits table
     shows that 53\% (2296/4327) have no recorded transtions during follow-up.
@@ -439,7 +497,7 @@ We can see several things by looking at this table.
     This is, it turns out, an interesting artifact of how the online
     data collection system was designed.
     The nurse abstracters who review the history have a screen with fields
-    for ``last assessment date for dementia' and 'dementia yes/no'.  
+    for ``last assessment date for dementia' and 'dementia yes/no'.
     At a second, third, etc review for a patient, should one occur,
     the contents of these are overwritten; thus the master data set
     at any given time only has the most recent value.
@@ -448,78 +506,253 @@ We can see several things by looking at this table.
     cognition is slipping selectively drop out, i.e., exactly those most
     likely to receive a dementia diagnosis at their next visit. 
 
-To reprise the 2022 paper we need to create a new endpoint of non-demented (ND)
-dementia, and death. 
+Jack et al (2022, PMID: 35310829) looked at a model for prediction of the
+absolute risk of dementia, 
+a key question was the additional predictive power of amyloid PET after 
+accounting for known risk factors of age, sex, the presence of one or more
+e4 allelles on the APOE gene, education, and CMC score (a count of
+7 cardio-metabolic conditions).
+It used the modified endpoint of non-demented/dementia/death, collapsing the
+CU and MCI categories.
+First create the modified diagnosis variable:
 
 ```{r, nondem}
-ddata <- dementia
-table(ddata$dx)
-temp <- c(1, 2,2,3,2,3,4)[as.numeric(ddata$dx)]
-ddata$dx2 <- factor(temp, 1:4, c("censor", "ND", "dementia", "death"))
-with(ddata, table(dx2, dx))
+dem <- dementia
+table(dem$dx)
+temp <- c(1, 2,2,3,2,3,4)[as.numeric(dem$dx)]
+dem$dx2 <- factor(temp, 1:4, c("censor", "ND", "dementia", "death"))
+with(dem, table2(dx2, dx))
 
-survcheck(Surv2(age, dx2) ~1, ddata, id=ptnum)
+survcheck(Surv2(age, dx2) ~1, dem, id=ptnum)
 ```
 
+The above shows 29 transtions from dementia to ND.
 The 2022 analysis was actually for time to *first* dementia. This change to
-using only first event is common enough that we have added an option to
+using only first event is common enough that we have added a routine to
 the survival package.
-survcheck(Surv2(age, dx2, repeated='first') ~1, ddata, id=ptnum)
-
 ```{r, first}
-ddata$edu4 <-pmax(8, ddata$educ) /4
-check2 <- survcheck(Surv2(age, dx2, repeated='first') ~1, ddata, id=ptnum)
-check2$transition
+# the next line doesn't yet work though
+# dx3 <- with(dem, nostutter(ptnum, dx, censor="alive", single=TRUE))
+# do it with unlist(tapply(...  which is very obscure
+tfun <- function(x) { y <- as.numeric(x); ifelse(y==1, 1, cummax(y))}
+temp <- with(dem, unlist(tapply(dx2, ptnum, tfun)))
 
+dem$dx3 <- factor(temp, 1:4, c("censor", "ND", "dementia", "death")) 
+dem$edu4 <-pmax(8, dem$educ) /4
+check2 <- survcheck(Surv2(age, dx3) ~1, dem, id=ptnum)
+check2$transition
+```
+
+Amyoid PET raises some important statistical issues.
+First is that only about 40% of the subjects have amyloid imaging.
+This appears to be largely a time issue: imaging is a second appointment of
+2 full days (MRI, amyloid PET, tau PET, optional FDG PET), and many who have
+previously given informed consent for imaging defer at this point.
+A second is that the ligand used for amyloid PET did not become available
+until several years after the start of the MCSA, so many of those who have
+imaging do not start at visit 1. 
+Third is that the pattern of amyloid accumulation has an elbow, and each subject
+has a unique age for their bend.
+Some prior work had categorized amyloid as low/moderate/high; our choice in
+this study was to use a time-dependent category of low/moderate/high/missing.
+
+```{r, data}
 # add categorized amlyoid, and initial CMC,
-#  but we want lvcf to work correctly wrt amyloid
-atemp <- with(ddata, lvcf(ptnum, centiloid))
+#  but we want lvcf to work correctly wrt amyloid, apply it before making NA
+#  a category
+atemp <- with(dem, lvcf(ptnum, centiloid))
 temp <- ifelse(is.na(atemp), 4,
-               as.numeric(cut(ddata$centiloid, c(-50, 25, 68, 500))))
-ddata$agrp <- factor(temp, 1:4, c("low", "mod", "high", "miss"))
-findex <- match(ddata$ptnum, ddata$ptnum)
-ddata$icmc <- ddata$cmc[findex]
-boxplot(centiloid ~ agrp, ddata)
+               as.numeric(cut(atemp, c(-50, 25, 68, 500))))
+dem$agrp <- factor(temp, 1:4, c("low", "mod", "high", "miss"))
+firstrow <- match(dem$ptnum, dem$ptnum)
+dem$icmc <- dem$cmc[firstrow]
+boxplot(centiloid ~ agrp, dem)
 abline(h=c(25, 68), col=2)
 ```
 
 Now fit two models, using CMC and initial CMC.
 ```{r, mfit1}
-mfit1 <- coxph(list(Surv2(age, dx2) ~ male + any.e4 + educ + cmc,
-                     1:2 ~ male*any.e4), 
-                data= ddata, id=ptnum) 
-mfit2 <- coxph(list(Surv2(age, dx2) ~ male + any.e4 + educ + icmc,
-                     1:2 ~ male*any.e4), 
-                data= ddata, id=ptnum) 
-matplot(cbind(coef(mfit1), coef(mfit2)), 1:17)
+mfit1 <- coxph(list(Surv2(age, dx3) ~ male + any.e4 + cmc + agrp,
+                     1:2 ~ male*(any.e4 + agrp)), 
+                data= dem, id=ptnum) 
+mfit2 <- coxph(list(Surv2(age, dx3) ~ male + any.e4 + icmc + agrp,
+                     1:2 ~ male*(any.e4 + agrp)), 
+                data= dem, id=ptnum) 
+
+opar <- par(mar=c(5,6,1,1))
+matplot(cbind(coef(mfit1), coef(mfit2)), 1:22, xlab="Coefficient",
+        ylab="", yaxt='n')
 abline(v=0, lty=3)
+axis(2, 1:22, names(coef(mfit2)), las=2)
+par(opar)
+```
+
+Not done: create my own version of Emily's nice plot (below) and insert it
+instead.
+
+```{r, echo=FALSE}
+knitr::include_graphics("figures/fig2.pdf")
 ```
 
 How do I get a probability in state curve for a 65 year old female, e4-,
-cmc of 2, current state of ND, and *current* centiloid of 30?
-The standard survfit call doesn't work for TD covariates.
-Answer, make more states.
+initial CMC of 2, current state of ND, and *current* centiloid of 30,
+when centiloid is a time dependent covariate?
+The standard survfit call (curves for a coxph model)
+doesn't work for TD covariates.
+For CMC, we are able to dodge the issue by instead using a time-fixed variable of
+initial CMC at recruitment.
+The plot above shows that hazard ratios don't change very much.
+But that is not an option for amyloid: any "initial amyloid" variable that we
+try to create leads to immortal time bias.
 
-```{r, manystate}
-with(ddata, table(agrp, dx2))
-temp1 <- with(ddata, lvcf(ptnum, ifelse(dx2=="censor", NA, dx2)))
-temp1 <- factor(temp1, 2:4, c("ND", "dementia", "death"))
-with(ddata, table2(agrp, temp1))
 
-temp2 <- with(ddata, as.numeric(agrp) + 4* as.numeric(temp1) -4)
-dx3 <- factor(temp2, c(0:8, 12), 
-              c("censor",
-                outer(c("low", "mod", "high", "miss"), c("ND", "dementia"),
-                      paste, sep='_'), "death"))
-check3 <- survcheck(Surv2(age, dx3) ~ 1, id=ptnum, ddata)
-check3$trans
+One approach is to make more states,
+creating 4 amyloid * (ND, dementia) + death= 9 states.
+One could also have 4*3 = 12, separating out death with low amyloid, death
+with moderate amyloid, etc.
+(The reason to use initial CMC instead of time-dependent CMC is so that this
+example has a more managable number of states.  The plot above shows that the
+models with initial and time dependent CMC are quite similar.)
 
-dim(check3$trans)
-table(check3$trans[, -10] >0)
-table(check3$trans[, -10])
+Create this new set of states. 
+Code wise, it was easiest to first fill out the censored
+values in the `dx3` variable to make it complete.
+We also need to create the first dementia status ourselves, as the automated
+methods may not recognize a mod/dementia to mod/ND transition
+as a should-not-be-allowed repeat of ND.
+
+```{r, crossed, echo=FALSE}
+# for the graph and text, it works better to put missing on the left
+sname <- c(outer(c("miss", "low", "mod", "high"), c("ND", "dem"), paste, 
+                 sep='/'), "death")
+alias <- data.frame(state= sname, 
+                    A= c(1:4, 1:4, 0),
+                    C= c(rep(1:2, each=4),3))
+# for the graph, put missing amyloid on the left (simpler writing)
+Qmat <- qplus(alias, death="death")
+
+# for statefig, reformat the state names to two lines
+sname2 <- c(outer(c("miss", "low", "mod", "high"), c("ND", "dem"), paste, 
+                 sep='\n'), "death")
+tempq <- Qmat
+dimnames(tempq) <- list(sname2, sname2)
+statefig(rbind(4,4,1), Qmat, acol=rep(c("black", "gray"), c(10,8)))
 ```
 
-This is as far as I got.
 
+```{r, manystate}
+with(dem, table(agrp, dx3))
+temp1 <- with(dem, ifelse(dx3=="censor", NA, as.numeric(dx3)))
+temp2 <- with(dem, lvcf(ptnum, temp1))
+temp2 <- factor(temp2, 2:4, c("ND", "dementia", "death"))
+with(dem, table2(agrp, temp2))
 
+temp3 <- with(dem, as.numeric(agrp) + 4* as.numeric(temp2) -4)
+# the pmin collapses 9-12= low/death, ..., miss/death in to "death"
+dem$dx4 <- factor(pmin(9, temp3), 0:9, 
+              c("censor",
+                outer(c("low", "mod", "high", "miss"), c("ND", "dem"),
+                      paste, sep='/'), "death"))
+check3 <- survcheck(Surv2(age, dx4) ~ 1, id=ptnum, dem)
+check3$trans
+```
 
+```{r, echo=FALSE}
+# add all the other arrows
+tempx <- tempq
+tempx[1, 2:4] <- .6
+tempx[3,2] <- tempx[4,3] <- 1
+tempx[2,4] <- .6
+tempx[1,6:8] <- 1
+tempx[2,7] <- 1
+tempx[6,8] <- .6
+statefig(rbind(4,4,1), tempx, acol=rep(c("black", "gray"), c(21,8)))
+```
+
+Writing a coxph call is going to be a bother: there are 9 transitons that 
+have a count of 5 or less, all of which would need to be bundled with some
+other one(s) to avoid undefined coefficients.
+Take another approach. Start with the simpler figure.
+
+For the MSH model, I am interested in only the downward arrows.
+One could explore the other factors, if any, the affect amyloid progression,
+i.e., rightward arrows from low to moderate or moderate to high,
+but the focus of the 2022 paper was on the prediction of cognitive state.
+Transitions from missing amlyoid to low/moderate/high amyloid, 
+lines 4 and 8 of the transitions table, occur for subjects
+who entered the study before the PET ligand for amyloid 
+(Pittsburg compound B) became available, those transitions are based
+on calendar date of the visit and have nothing to do with disease per se.
+
+An alias data set is useful here; it allows shorthand formulas
+within the coxph and cmsh functions.
+
+```{r, multifit1}
+alias
+
+mfit3 <- coxph(list(Surv2(age, dx4) ~ 1 ,
+                   C(1):C(2)    ~ male*(any.e4 +agrp)+ icmc + 1/ common,
+                   C(1):"death" ~ male + any.e4 + icmc + agrp + 1 /common,
+                   C(2):"death" ~ male + any.e4 + icmc + agrp + 1 /common),
+              data=dem, id=ptnum, statedata= alias)
+mfit3
+```
+
+In a Cox model, either single endpoint or a MSH, the baseline hazard plays
+a similar role to the intercept in a GLM, but it's estimation can be
+deferred until after solving for the coefficients $\beta$; it is similar
+in that way to the estimation of $\hat\sigma$ in a least-squared model.
+In the code above the combination of `agrp + 1` and `\common` on line
+1 of the formula signals that proportional baseline hazards will be used
+for the set of ND:dementia transitions, i.e. assume hazards of
+$$ \begin{aligned}
+	&\lambda_{ND, dem}(t) \\
+	&\lambda_{ND, dem}(t) e^{\gamma_1}\\
+	&\lambda_{ND, dem}(t) e^{\gamma_2}\\
+	&\lambda_{ND, dem}(t) e^{\gamma_3}
+\end{aligned}
+$$
+for transitions from the low/ND to any of the 4 dementia states,
+for transitions from mod/ND  ($\gamma_1$) to any of the 4 demenetia states,
+for transitions from high/ND ($\gamma_2$) and for transtions from 
+miss/ND ($\gamma_3$), respectively.
+(The $\gamma$s are in the order of the factor levels for agrp, not the
+order of my picture).
+This includes for instance the one diagnonal transition from 
+low/ND to mod/dem found in the transitons table. 
+These three $\gamma$ coefficients appear as `agrp` in the first block 
+of printed coefficients for the model.
+
+In mfit3, amyloid is no longer a time dependent variable but rather a 
+state. There in fact no time-dependent coeffcients, and so we are able
+to create honest predictions based on baseline covariates, starting
+age, and starting state.
+
+```{r, multifit2, eval=FALSE}
+dummy1 <- expand.grid(male=0:1, any.e4 = 0:1, icmc=1)
+
+#msurv3.1 <- survfit(mfit3, newdata = dummy1, start.time=65,
+#                    p0=c(1,0,0,0,0,0,0,0,0))
+# the above call gives an error
+# this is a flaw in the survival package, which is being addressed
+```
+
+What is most interesting is that the log-likelihood and coefficients from
+`mfit2` and `mfit3` are identical. This is because the underlying partial
+likelihood terms, one for each transition with covariates, have exactly
+the same set of subjects at risk, with the same covariate pattern.
+The coefficient's names and order differ, but values agree.
+
+```{r, same}
+rbind(mfit2= mfit2$loglik, mfit3= mfit3$loglik)
+```
+
+One of the challenging aspects of multistate models is managing the total
+number of parameters. There are 35 separate transitions in this example,
+the number of non-zero elements in the transitons matrix. Without constraints,
+each transition will be assigned its own coefficient values for male, any.e4,
+cmc and amyloid, $6*35= 210$ coefficients, along with 35 separate baseline
+hazard functions.
+One way to think of this is that the coxph function creates transition *
+covariate interactions by default; the same combinatorial explosiion would
+occur in linear models if we included all possible interactions.
