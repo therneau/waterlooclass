@@ -91,7 +91,7 @@ The diagonal elements of $A$ as such that row sums are zero.
 Then we have
 
 \begin{align}
-  p(t) &= p_0(t) \prod_{s \le t} \exp(I+ A(s)) \label{AJ1} \\
+  p(t) &= p_0(t) \prod_{s \le t} (I+ A(s) \label{AJ1} \\
        &= p_0(t) \prod_{s \le t} \exp(A(s)) \label{AJ2}
 \end{align}
 Note that \eqref{AJ1} is a first order Taylor series for \eqref{AJ2}.
