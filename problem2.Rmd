@@ -1,0 +1,168 @@
+---
+title: Problems, part 2
+author: Terry Therneau
+---
+
+My first set of problem notes talked about issues that I have encountered
+in my data analysis. 
+This one provides a more prosciptive description for two of them.
+
+# Treating a time dependent covariate as a state
+
+I had worked out an idea for time-dependent covariates during analysis of the
+dementia data (Jack, 2022) but it was a bit ad hoc. The first portion of chapter
+14 of my new book looked at the approach, replacing a time dependent covariate
+with a set of states, more carefully using the PBC data, a simple
+data set that I know well. (It has been distributed in the R survival package
+for over 2 decades and so has appeared in many statistical papers as well.)
+
+ * The normal range for bilirubin has an upper limit of 1 to 1.3 mg/dL, depending
+ on the reference, for simplicity I divided the range into 0-1, 1-4, and >4. 
+ I purposefully did not devote effort to finding "best" cutpoints as I wanted
+ to see if a relatively crude approach did okay.
+ * The question at hand was whether the predicted survival for someone in the
+ low/medium and high groups was well predicted by the covariate-as-a-state
+ approach.
+ * We know that a basic 3 group Kaplan-Meier based on enrollment bilirubin
+ will produce unbiased curves, so it acts as a reference.
+ 
+The result was that the time-dependent approach appeared to do well, with a
+smaller standard error and (nearly) unbiased values. This single example is
+interesting, but one example is far from a proof. A simulation study would be
+a first step in making this more convincing.
+
+The pbcsim.Rmd file is an early attempt to set up structure for this. Think of
+it as a possible template, but not a rigid prescription.
+(The text in the file was written an notes to myself, to help remember what I
+was doing, but may not be clear to anyone else. If it's confusing, ask me
+questions.)
+
+In the simulated data, each subject has a true bilirubin curve, and a true
+hazard of death which is a function of age and current bilirubin.  Observed
+data is obtained at 6 months, 12 months and yearly thereafter, per the PBC
+study's protocol (+- some variation as people are never exactly on time),
+with measure bilirubin = true bilirubin + error.  Censoring mimics the study.
+Key questions are the bias, std error, and MSE of the simple KM and of the
+TD covariate based curves, at 2, 4, 6, 8 and 10 years, for both the simple
+Aalen-Johansen and the Cox model estimates.
+
+Some areas to extend this preliminary work
+
+ 1. Sample size. Results for a small to large studies. (Average of 50, 100, 200,
+400 deaths).
+ 2. Covariate noise. For laboratory values in real life, a CV of .2 is not
+uncommon: try .1, .2, .4, .6. (The last is a quite noisy test, but such are seen.
+It could be an assay issue, diurnal variation, drug interactions, etc.)
+ 3. Effect size: the size of the bilirubin effect on survival.  The HR in the
+ PBC study is actually quite large, there will be an interest in more common
+ values, e.g., a 1.25 or 1.5 fold increase in death rates between the 25th and
+ 75th percentiles of the covariate.
+ 4. Number of categories. Three was arbitrary, as were the cutpoints. What about
+ 4, 5, 6, ... categories.  (Hypothesis: variance an bias may initially go down,
+ then will stabilized, and too many categories will lead to collapse.  The
+ pattern for AJ and coxph might be different).
+ 5. Multiple covariates. The AJ curves are for all ages, the Cox model 
+ predictions are age specific.  For people further from the mean age, how
+ much better are age specific curves?
+ 6. Multiple covariates. The book tried fits with 3 TD covariates. Simulation
+ results for that case? You will need to add 2 more covariates to the simulation
+ data, and decide on a true hazard rate.
+ 
+Another area of interst is comparison of this approach to joint models.
+
+ 1. The simulation data was based on a theoretical model of PBC, which is a slow
+increase in liver function tests, followed by a rapid increase when the organ
+begins to run out of capacity (and also a rapid increase in hazard). Joint model
+fits almost invariably assume a linear model for the time-dependent covariate,
+with per subject intercept and slope. Does the "make bilirubin a state" model
+do better/worse than a joint model?
+ 2. If the simulated data followed a joint model (the per-subject bilirubin curve
+was linear, with per-subject intercept and slope) one would presume that the 
+joint model will do better. But by how much? (Is the TD model an okay choice
+even when it isn't the optimal one?)
+ 3.  What is the impact of multiple covariates?
+
+
+# Intemittent observation
+
+As stated several times now, we have two primary approaches to multi-state
+data.
+ 1. A likelihood based on observed *transitions*. This is handled by the coxph 
+ function in the survival package.
+ 2. A likelhood based on observed *state*. These models can be fit with msm
+ or mshmm.
+ 
+Advantages of 1 are that the code if fast and fairly easy to use. The set of
+observable transitions is inferred automatically from the data. 
+The idea is that a possible transiton that is never observed will have an
+estimated rate of 0, which is practice no different than never occuring.
+
+But the transition based approach has some flaws, ones that become more
+pronounced with a larger number of states.
+ * For most data sets, we do not observe all the transitions, i.e., what
+ change occured and exactly when. For example, the time to observed 
+ progression of a tumor
+ (the office visit when tumor growth is ascertained) is by definition later
+ than the actual progression time.
+ * Jump transitions will be observed, e.g., going directly from 0MC to 2MC in
+ the fatty liver data. Biologically, subjects have to pass through the 1MC
+ state to get from 0MC to 2MC. However, because it is an observed transition,
+ a coxph fit needs account for it, i.e., explicitly include it in the modeling.
+ This leads to extra parmaeters, and possible numeric issues for transitions
+ with very few events. The more complex model is also harder to summarize
+ for presentation.
+ * Any covariates that affect interarrival times can get confounded. For
+ instance assume males dislike going to the doctor so have longer intervals
+ between visit. Then the jump transitions will have more males.
+ 
+ For all of these reasons a state based model may be preferable. The state 
+ based models also allow for partially observed states, an important extension
+ for many cases. But this exercise will focus on cases where both a transition
+ bases and state based model can be fit.
+ 
+ Compuational notes:
+  * The state based models are more difficult to fit: compute time for msm and
+  mshmm is often 10x greater than coxph.
+  * The msm code is often a bit faster, but also more likely to fail to
+  converge. However, in a simulation context, one can use the true coefficients
+  of the data as starting estimates, which should help both speed and 
+  convergence
+  
+Projects
+
+Create a set of simulated interarrival times as a mixture distribution. Each
+subject has a mean and variance of times between visit.  Let the progression
+between states follow a known model: rate of first = f1(age, sex, x1, x2),
+time from first to second = f2(age, sex, x1,x2), etc.  Hazard of death a
+function of age, sex, x1, x2,  number of comorbidities. 
+Initially pick the parameters to roughly mimic the NAFLD study, in order to
+get realistic rates.
+ 
+ 1. This data aligns with the state model. How well does the transition model
+do? (Bias, variance, etc) with respect to estimating the hazard coefficients,
+probability in state, and expected time in state?  Is the state model unbiased?
+ 2. How does the visit interval affect this. Hypothesis: if visit intervals
+were constant, for all subjects, the transition model HR will be quite close 
+to correct and time in state estimates off by (visit interval)/2. 
+What is the impact of mean and variance of visit interval?  (Differences between
+the two models are more pronounced?)
+3. Make the mean visit interval different for males and females. What is the
+ effect on the estimates?
+ 
+ 
+# Informative drop out
+In the dementia data, a substantial fraction of dementias are detected at record
+review follow-ups. Many studied do not have this off study data, so it is of
+interest to see what effect it has.
+
+ 1. Fit the model both with and without the off study data, with age, male,
+ any.e4, 
+education and enrollment CMC as covariates (ignore time-dependent covariates).
+What is the impact on covariates, and on probability in state estimates?
+   * Not demented, dementia, death as the states, both transition and state 
+ models can be used, both with and without the offstudy data
+   * CU, MCI, dementia, death as the states. A transition model using the off
+   study data is not possible.
+ 
+
+
